@@ -20,3 +20,8 @@ if [ -z "$AGNOS_VERSION" ]; then
 fi
 
 export STAGING_ROOT="/data/safe_staging"
+
+# Haval H6 PHEV 2026 (MK4): OBD/FW query returns 0 ECUs on this harness, so force the platform.
+# Also have CAN FINGERPRINTS in opendbc gwm/fingerprints.py as a fallback without this env.
+export FINGERPRINT=GWM_HAVAL_H6_MK4
+export SKIP_FW_QUERY=1
