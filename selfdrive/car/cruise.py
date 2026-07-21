@@ -129,6 +129,11 @@ class VCruiseHelper:
       return
 
     initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode else V_CRUISE_INITIAL
+    # GWM MK4 (pcmCruise=False): stock openpilot floors set speed at 40 kph on engage, so a
+    # city engage at 15–25 kph still targets 40+ and accelerates hard on narrow streets.
+    # Use current speed, with a 20 kph floor only when crawling/stopped (not a 40 kph force).
+    if self.CP.brand == "gwm" and not experimental_mode:
+      initial = 20
 
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last
