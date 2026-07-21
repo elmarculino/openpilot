@@ -42,7 +42,10 @@ class VCruiseHelper:
     return self.v_cruise_kph != V_CRUISE_UNSET
 
   def update_v_cruise(self, CS, enabled, is_metric):
-    self.v_cruise_kph_last = self.v_cruise_kph
+    # Never remember UNSET as "last set speed" — cancel/available-off would otherwise
+    # poison resume with 255 after one extra frame.
+    if self.v_cruise_kph != V_CRUISE_UNSET:
+      self.v_cruise_kph_last = self.v_cruise_kph
 
     if CS.cruiseState.available:
       if not self.CP.pcmCruise:
@@ -60,8 +63,12 @@ class VCruiseHelper:
           self.v_cruise_kph = -1
           self.v_cruise_cluster_kph = -1
     else:
-      self.v_cruise_kph = V_CRUISE_UNSET
-      self.v_cruise_cluster_kph = V_CRUISE_UNSET
+      # pcmCruise: main switch off → clear. non-pcm (OP_CRUISE): cancel often pulses
+      # available off every disengage; wiping here publishes vCruise=255 and loses the
+      # previous set speed until initialize runs (and can stick if that edge is missed).
+      if self.CP.pcmCruise:
+        self.v_cruise_kph = V_CRUISE_UNSET
+        self.v_cruise_cluster_kph = V_CRUISE_UNSET
 
   def _update_v_cruise_non_pcm(self, CS, enabled, is_metric):
     # handle button presses. TODO: this should be in state_control, but a decelCruise press
@@ -135,9 +142,18 @@ class VCruiseHelper:
     if self.CP.brand == "gwm" and not experimental_mode:
       initial = 20
 
-    if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
+    def _from_vego() -> int:
+      return int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))
+
+    resume = any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents)
+    last_ok = self.v_cruise_initialized and V_CRUISE_MIN <= self.v_cruise_kph_last <= V_CRUISE_MAX
+    if resume and last_ok:
       self.v_cruise_kph = self.v_cruise_kph_last
     else:
-      self.v_cruise_kph = int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))
+      self.v_cruise_kph = _from_vego()
+
+    # Hard guarantee: never leave engage with UNSET/255 (planner treats it as uninit).
+    if not self.v_cruise_initialized or self.v_cruise_kph > V_CRUISE_MAX:
+      self.v_cruise_kph = _from_vego()
 
     self.v_cruise_cluster_kph = self.v_cruise_kph
