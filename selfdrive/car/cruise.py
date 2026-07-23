@@ -146,14 +146,18 @@ class VCruiseHelper:
       return int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))
 
     resume = any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents)
-    last_ok = self.v_cruise_initialized and V_CRUISE_MIN <= self.v_cruise_kph_last <= V_CRUISE_MAX
+    last_ok = (
+      self.v_cruise_kph_last != V_CRUISE_UNSET
+      and V_CRUISE_MIN <= self.v_cruise_kph_last <= V_CRUISE_MAX
+    )
     if resume and last_ok:
       self.v_cruise_kph = self.v_cruise_kph_last
     else:
       self.v_cruise_kph = _from_vego()
 
-    # Hard guarantee: never leave engage with UNSET/255 (planner treats it as uninit).
-    if not self.v_cruise_initialized or self.v_cruise_kph > V_CRUISE_MAX:
+    # Hard guarantee: never leave engage with UNSET/255 (planner + cluster treat as uninit).
+    if (not self.v_cruise_initialized or self.v_cruise_kph > V_CRUISE_MAX
+        or self.v_cruise_kph < V_CRUISE_MIN):
       self.v_cruise_kph = _from_vego()
 
     self.v_cruise_cluster_kph = self.v_cruise_kph
