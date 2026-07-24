@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 echo "== openpilot =="
 git -C "$ROOT" log -1 --oneline
-echo "== opendbc_repo (expect 2e8e92ff or later on gwm-haval-h6-mk4-sp) =="
+echo "== opendbc_repo (expect 2e8e92ff or later on h6-sp) =="
 git -C "$ROOT/opendbc_repo" log -1 --oneline
 echo "== GWM car interface =="
 ls "$ROOT/opendbc_repo/opendbc/car/gwm"/{interface,carcontroller,carstate,gwmcan,values}.py
