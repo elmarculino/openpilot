@@ -135,12 +135,14 @@ class VCruiseHelper:
     if self.CP.pcmCruise:
       return
 
-    initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode else V_CRUISE_INITIAL
-    # GWM MK4 (pcmCruise=False): stock openpilot floors set speed at 40 kph on engage, so a
-    # city engage at 15–25 kph still targets 40+ and accelerates hard on narrow streets.
-    # Use current speed, with a 20 kph floor only when crawling/stopped (not a 40 kph force).
-    if self.CP.brand == "gwm" and not experimental_mode:
+    # GWM MK4 (pcmCruise=False): always init set-speed from vEgo with a 20 kph floor.
+    # Stock openpilot uses 40 (chill) or 105 (experimental) as the *minimum* on engage —
+    # with experimental mode that force-floors every city engage to 105 kph. OP_CRUISE
+    # owns set-speed from the stalk, so neither floor is appropriate for GWM.
+    if self.CP.brand == "gwm":
       initial = 20
+    else:
+      initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode else V_CRUISE_INITIAL
 
     def _from_vego() -> int:
       return int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))
