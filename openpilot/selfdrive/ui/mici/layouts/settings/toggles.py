@@ -53,6 +53,9 @@ class TogglesLayoutMici(NavScroller):
                                                    "Set speed is a maximum, not a target.\n" +
                                                    "These are alpha features. Expect mistakes.\n" +
                                                    "The path colors show acceleration and braking.")
+    scc_v_toggle = BigParamControl("slow for curves", "SmartCruiseControlVision",
+                                   description="Lower speed before curves using the driving model path.\n" +
+                                               "Needs openpilot longitudinal. Does not slow for speed bumps.")
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled",
                                  description="Warn when you drift across a detected lane line.\n" +
@@ -69,9 +72,11 @@ class TogglesLayoutMici(NavScroller):
                                        description="Enable to use openpilot driver assistance.\n" +
                                                    "Disable to use your car's stock driver assistance.")
 
+    self._scc_v_toggle = scc_v_toggle
     self._scroller.add_widgets([
       self._personality_toggle,
       self._experimental_btn,
+      self._scc_v_toggle,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -83,6 +88,7 @@ class TogglesLayoutMici(NavScroller):
     # Toggle lists
     self._refresh_toggles = (
       ("ExperimentalMode", self._experimental_btn),
+      ("SmartCruiseControlVision", self._scc_v_toggle),
       ("IsMetric", is_metric_toggle),
       ("IsLdwEnabled", ldw_toggle),
       ("AlwaysOnDM", always_on_dm_toggle),
@@ -122,11 +128,13 @@ class TogglesLayoutMici(NavScroller):
       if ui_state.has_longitudinal_control:
         self._experimental_btn.set_visible(True)
         self._personality_toggle.set_visible(True)
+        self._scc_v_toggle.set_visible(True)
       else:
         # no long for now
         self._experimental_btn.set_visible(False)
         self._experimental_btn.set_checked(False)
         self._personality_toggle.set_visible(False)
+        self._scc_v_toggle.set_visible(False)
         ui_state.params.remove("ExperimentalMode")
 
     # Refresh toggles from params to mirror external changes

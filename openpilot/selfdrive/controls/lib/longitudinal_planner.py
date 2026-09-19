@@ -13,6 +13,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
+from openpilot.selfdrive.controls.lib.vision_turn_speed import SmartCruiseControlVision
 from openpilot.common.swaglog import cloudlog
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
@@ -65,6 +66,7 @@ class LongitudinalPlanner:
     self.a_cruise = init_a
     self.output_a_target = init_a
     self.output_should_stop = False
+    self.scc_v = SmartCruiseControlVision()
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -81,6 +83,11 @@ class LongitudinalPlanner:
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     if sm['controlsState'].forceDecel:
       v_cruise = 0.0
+
+    self.scc_v.update(sm, sm['carControl'].enabled, sm['carControl'].cruiseControl.override,
+                      v_ego, sm['carState'].aEgo, v_cruise)
+    if self.scc_v.is_active:
+      v_cruise = min(v_cruise, self.scc_v.output_v_target)
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
 
@@ -139,6 +146,8 @@ class LongitudinalPlanner:
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if sm['selfdriveState'].experimentalMode:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
+    if self.scc_v.is_active:
+      candidates.append((self.scc_v.output_a_target, LongitudinalPlanSource.cruise, False))
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)

@@ -54,6 +54,12 @@ class TogglesLayout(Widget):
         "experimental_white.png",
         False,
       ),
+      "SmartCruiseControlVision": (
+        lambda: tr("Slow for Curves"),
+        tr_noop("Lower speed before curves using the driving model path. Needs openpilot longitudinal. Does not slow for speed bumps."),
+        "speed_limit.png",
+        False,
+      ),
       "DisengageOnAccelerator": (
         lambda: tr("Disengage on Accelerator Pedal"),
         DESCRIPTIONS["DisengageOnAccelerator"],
@@ -172,11 +178,13 @@ class TogglesLayout(Widget):
         self._toggles["ExperimentalMode"].action_item.set_enabled(True)
         self._toggles["ExperimentalMode"].set_description(e2e_description)
         self._long_personality_setting.action_item.set_enabled(True)
+        self._toggles["SmartCruiseControlVision"].action_item.set_enabled(True)
       else:
         # no long for now
         self._toggles["ExperimentalMode"].action_item.set_enabled(False)
         self._toggles["ExperimentalMode"].action_item.set_state(False)
         self._long_personality_setting.action_item.set_enabled(False)
+        self._toggles["SmartCruiseControlVision"].action_item.set_enabled(False)
         self._params.remove("ExperimentalMode")
 
         unavailable = tr("Experimental mode is currently unavailable on this car since the car's stock ACC is used for longitudinal control.")
