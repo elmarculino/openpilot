@@ -89,18 +89,27 @@ class SmartCruiseControlVision:
     if not self.long_enabled:
       return
 
-    rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
-    vel_plan = np.array(sm['modelV2'].velocity.x)
+    try:
+      rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
+      vel_plan = np.array(sm['modelV2'].velocity.x)
+      curvature = abs(sm['controlsState'].curvature)
+    except (AttributeError, TypeError, ValueError):
+      self.max_pred_lat_acc = 0.
+      self.v_target = self.v_cruise_setpoint
+      return
+
     n = min(len(rate_plan), len(vel_plan))
     if n == 0:
       self.max_pred_lat_acc = 0.
       self.v_target = self.v_cruise_setpoint
       return
 
-    self.current_lat_acc = self.v_ego ** 2 * abs(sm['controlsState'].curvature)
+    self.current_lat_acc = self.v_ego ** 2 * curvature
 
     predicted_lat_accels = rate_plan[:n] * vel_plan[:n]
     self.max_pred_lat_acc = float(np.percentile(predicted_lat_accels, 97))
+    if not np.isfinite(self.max_pred_lat_acc):
+      self.max_pred_lat_acc = 0.
 
     v_ego = max(self.v_ego, 0.1)
     max_curve = self.max_pred_lat_acc / (v_ego ** 2)
