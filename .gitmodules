@@ -4,7 +4,7 @@
 [submodule "opendbc"]
   path = opendbc_repo
 	url = https://github.com/elmarculino/opendbc.git
-	branch = mk4-haval-phev-2026
+	branch = mk4-cinque
 [submodule "msgq"]
   path = msgq_repo
   url = ../../commaai/msgq.git
@@ -17,3 +17,4 @@
 [submodule "tinygrad"]
   path = tinygrad_repo
   url = https://github.com/tinygrad/tinygrad.git
+  branch = master
