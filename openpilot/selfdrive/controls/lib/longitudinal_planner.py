@@ -84,7 +84,8 @@ class LongitudinalPlanner:
     if sm['controlsState'].forceDecel:
       v_cruise = 0.0
 
-    self.scc_v.update(sm, sm['carControl'].enabled, sm['carControl'].cruiseControl.override,
+    long_active = bool(sm['carControl'].longActive)
+    self.scc_v.update(sm, long_active, sm['carControl'].cruiseControl.override,
                       v_ego, sm['carState'].aEgo, v_cruise)
     if self.scc_v.is_active:
       v_cruise = min(v_cruise, self.scc_v.output_v_target)

@@ -140,7 +140,9 @@ class CarEvents:
     if CS.steeringDisengage and not CS_prev.steeringDisengage:
       events.add(EventName.steerDisengage)
     if CS.brakePressed and CS.standstill:
-      events.add(EventName.preEnableStandstill)
+      # H6 MK4 MADS: allow lat engage with foot on the brake (standstill / speed bump).
+      if not (self.CP.brand == 'gwm' and not self.CP.pcmCruise):
+        events.add(EventName.preEnableStandstill)
     if CS.gasPressed:
       events.add(EventName.gasPressedOverride)
     if CS.vehicleSensorsInvalid:

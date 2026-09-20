@@ -22,6 +22,7 @@ from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
+from openpilot.selfdrive.selfdrived.mads_h6 import H6Mads
 
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware import HARDWARE
@@ -132,9 +133,7 @@ class SelfdriveD:
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
-    # H6 MK4: ACC and LKAS are independent. Brake/regen drop long only.
-    self.mads_h6 = self.CP.brand == 'gwm' and not self.CP.pcmCruise
-    self.long_enabled = False
+    self.mads = H6Mads() if (self.CP.brand == 'gwm' and not self.CP.pcmCruise) else None
 
     # Determine startup event
     self.startup_event = EventName.startup if build_metadata.openpilot.comma_remote and build_metadata.tested_channel else EventName.startupMaster
@@ -256,23 +255,22 @@ class SelfdriveD:
       user_brake = (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
                    (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill))
       user_gas = CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator
-      if self.mads_h6:
-        if user_brake:
-          self.long_enabled = False
+      if self.mads is not None:
         if user_gas:
           self.events.add(EventName.pedalPressed)
         lkas_tap = any(be.type == ButtonType.lkas and be.pressed for be in CS.buttonEvents)
-        if lkas_tap:
-          if self.enabled and not self.long_enabled:
-            self.events.add(EventName.buttonCancel)
-          elif not self.enabled:
-            self.events.add(EventName.buttonEnable)
-            self.long_enabled = False
-        if CS.buttonEnable:
-          self.long_enabled = True
-        if self.enabled and not self.long_enabled:
+        want_enable, want_cancel, override_long = self.mads.update(
+          engaged=self.enabled,
+          user_brake=user_brake,
+          lkas_tap=lkas_tap,
+          acc_enable=CS.buttonEnable,
+        )
+        if want_cancel:
+          self.events.add(EventName.buttonCancel)
+        if want_enable:
+          self.events.add(EventName.buttonEnable)
+        if override_long:
           self.events.add(EventName.gasPressedOverride)
-        self.events.events = [e for e in self.events.events if e != EventName.preEnableStandstill]
       elif user_gas or user_brake:
         self.events.add(EventName.pedalPressed)
 
@@ -580,8 +578,8 @@ class SelfdriveD:
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
-    if not self.enabled:
-      self.long_enabled = False
+    if self.mads is not None and not self.enabled:
+      self.mads.reset()
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)

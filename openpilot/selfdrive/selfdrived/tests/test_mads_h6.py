@@ -1,0 +1,85 @@
+from openpilot.selfdrive.selfdrived.mads_h6 import H6Mads
+
+
+def test_gentle_from_off_is_lat_only():
+  m = H6Mads()
+  want_enable, want_cancel, override = m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert want_enable
+  assert not want_cancel
+  assert not m.long_enabled
+  assert not override  # engaged is still false this frame
+  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  assert not want_enable
+  assert not want_cancel
+  assert override
+
+
+def test_gentle_from_lat_only_cancels():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert want_cancel
+  assert not want_enable
+  assert not override
+
+
+def test_gentle_from_both_drops_acc():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert m.long_enabled
+  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert not want_cancel
+  assert not m.long_enabled
+  assert override
+
+
+def test_detent_engages_both():
+  m = H6Mads()
+  want_enable, want_cancel, override = m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert want_enable
+  assert not want_cancel
+  assert m.long_enabled
+  assert not override
+  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  assert not override
+
+
+def test_detent_from_lat_only_adds_acc():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert m.long_enabled
+  assert not want_cancel
+  assert not override
+
+
+def test_brake_drops_acc_keeps_lat():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  want_enable, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  assert not m.long_enabled
+  assert not want_cancel
+  assert override
+
+
+def test_brake_while_lat_only_stays_lat():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  assert not want_cancel
+  assert override
+
+
+def test_reset_clears_acc():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  m.reset()
+  assert not m.long_enabled
+
+
+def test_wheel_does_not_enable_acc_without_acc_enable():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  assert override
+  assert not m.long_enabled
