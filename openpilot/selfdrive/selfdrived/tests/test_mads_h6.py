@@ -83,3 +83,32 @@ def test_wheel_does_not_enable_acc_without_acc_enable():
   _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
   assert override
   assert not m.long_enabled
+
+
+def test_same_cycle_brake_and_detent_is_lat_only():
+  # Braking while moving and pressing the stalk detent in the same cycle: the brake wins, so
+  # ENABLE is raised together with the long override and state.py enters State.overriding
+  # directly. Without this the FSM would spend a cycle in State.enabled believing long is live.
+  m = H6Mads()
+  want_enable, want_cancel, override = m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  assert want_enable
+  assert not want_cancel
+  assert override
+  assert not m.long_enabled
+
+
+def test_detent_without_brake_still_takes_long():
+  m = H6Mads()
+  want_enable, _, override = m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert want_enable
+  assert not override
+  assert m.long_enabled
+
+
+def test_brake_release_after_engaging_under_brake_does_not_resume_long():
+  # long stays off until the driver asks for it again -- release alone must not silently resume ACC
+  m = H6Mads()
+  m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  assert override
+  assert not m.long_enabled

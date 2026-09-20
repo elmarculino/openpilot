@@ -45,7 +45,11 @@ class H6Mads:
     if acc_enable:
       want_enable = True
       want_cancel = False
-      self.long_enabled = True
+      # A brake in this same cycle still wins: engaging while braking is lat-only until release.
+      # Without this, ENABLE arrives without OVERRIDE_LONGITUDINAL and state.py:86 lands on
+      # State.enabled instead of State.overriding -- the FSM would believe long is live with a
+      # foot on the pedal (the panda blocks the TX either way, but the two layers must agree).
+      self.long_enabled = not user_brake
 
     override_long = (engaged or want_enable) and not self.long_enabled and not want_cancel
     return want_enable, want_cancel, override_long
