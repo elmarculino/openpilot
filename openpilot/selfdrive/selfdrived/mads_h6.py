@@ -36,5 +36,5 @@ class H6Mads:
       want_cancel = False
       self.long_enabled = True
 
-    override_long = engaged and not self.long_enabled and not want_cancel
+    override_long = (engaged or want_enable) and not self.long_enabled and not want_cancel
     return want_enable, want_cancel, override_long

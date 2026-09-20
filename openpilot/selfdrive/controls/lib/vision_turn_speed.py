@@ -93,7 +93,7 @@ class SmartCruiseControlVision:
       rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
       vel_plan = np.array(sm['modelV2'].velocity.x)
       curvature = abs(sm['controlsState'].curvature)
-    except (AttributeError, TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError, KeyError):
       self.max_pred_lat_acc = 0.
       self.v_target = self.v_cruise_setpoint
       return

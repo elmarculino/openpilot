@@ -7,7 +7,7 @@ def test_gentle_from_off_is_lat_only():
   assert want_enable
   assert not want_cancel
   assert not m.long_enabled
-  assert not override  # engaged is still false this frame
+  assert override  # same frame as enable so longActive never pulses
   want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
   assert not want_enable
   assert not want_cancel
