@@ -2612,8 +2612,6 @@ struct Event {
 
     lateralManeuverPlan @150 :LateralManeuverPlan;
 
-    lateralManeuverPlan @150 :LateralManeuverPlan;
-
     # *********** debug ***********
     testJoystick @52 :Joystick;
     narrowRoadEncodeData @86 :EncodeData;
