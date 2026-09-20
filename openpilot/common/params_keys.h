@@ -120,8 +120,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RecordFrontLock", {PERSISTENT, BOOL}},  // for the internal fleet
     {"SecOCKey", {PERSISTENT | DONT_LOG, STRING}},
     {"ShowDebugInfo", {PERSISTENT, BOOL}},
-    {"SmartCruiseControlVision", {PERSISTENT, BOOL, "1"}},
     {"RouteCount", {PERSISTENT, INT, "0"}},
+    {"SmartCruiseControlVision", {PERSISTENT, BOOL, "1"}},
     {"SnoozeUpdate", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"SshEnabled", {PERSISTENT, BOOL}},
     {"UbloxAvailable", {PERSISTENT, BOOL}},

@@ -6,6 +6,17 @@ outside this helper).
 """
 from __future__ import annotations
 
+from typing import Any
+
+
+def uses_h6_mads(CP: Any) -> bool:
+  """Single source of truth for the MADS-lite gate.
+
+  selfdrived (which events to raise) and car_events (which to suppress) must agree, so keep
+  the condition here rather than repeating it.
+  """
+  return CP.brand == 'gwm' and not CP.pcmCruise
+
 
 class H6Mads:
   def __init__(self) -> None:

@@ -12,9 +12,11 @@ import numpy as np
 from openpilot.common.constants import CV
 from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 
 MIN_V = 20 * CV.KPH_TO_MS  # do not operate under 20 km/h
+# Sentinel for "no speed request". Unitless so it cannot be confused with the km/h
+# V_CRUISE_UNSET: output_v_target is consumed as m/s and only ever read through min().
+V_TARGET_UNSET = float('inf')
 PARAMS_UPDATE_PERIOD = 3.0  # seconds
 
 
@@ -50,20 +52,19 @@ class SmartCruiseControlVision:
   a_target: float = 0.
   v_ego: float = 0.
   a_ego: float = 0.
-  output_v_target: float = V_CRUISE_UNSET
+  output_v_target: float = V_TARGET_UNSET
   output_a_target: float = 0.
 
-  def __init__(self):
+  def __init__(self, enabled: bool | None = None):
     self.params = Params()
     self.frame = -1
     self.long_enabled = False
     self.long_override = False
     self.is_enabled = False
     self.is_active = False
-    try:
-      self.enabled = self.params.get_bool("SmartCruiseControlVision")
-    except UnknownKeyName:
-      self.enabled = True
+    # An explicit value pins the toggle (tests, replay); otherwise it tracks Params.
+    self._enabled_override = enabled
+    self.enabled = enabled if enabled is not None else self._read_enabled()
     self.v_cruise_setpoint = 0.
 
     self.state = VisionState.disabled
@@ -76,32 +77,42 @@ class SmartCruiseControlVision:
   def get_v_target_from_control(self) -> float:
     if self.is_active:
       return max(self.v_target, MIN_V) + self.a_target * _NO_OVERSHOOT_TIME_HORIZON
-    return V_CRUISE_UNSET
+    return V_TARGET_UNSET
+
+  def _read_enabled(self) -> bool:
+    try:
+      return self.params.get_bool("SmartCruiseControlVision")
+    except UnknownKeyName:
+      return True
 
   def _update_params(self) -> None:
+    if self._enabled_override is not None:
+      return
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
-      try:
-        self.enabled = self.params.get_bool("SmartCruiseControlVision")
-      except UnknownKeyName:
-        self.enabled = True
+      self.enabled = self._read_enabled()
+
+  def _reset_calculations(self) -> None:
+    # Both lat accels must go to zero: a stale current_lat_acc keeps the state machine latched in
+    # `turning` (exit needs current_lat_acc <= _LEAVING_LAT_ACC_TH), commanding decel forever.
+    self.current_lat_acc = 0.
+    self.max_pred_lat_acc = 0.
+    self.v_target = self.v_cruise_setpoint
 
   def _update_calculations(self, sm: Any) -> None:
     if not self.long_enabled:
       return
 
     try:
-      rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
+      rate_plan = np.abs(sm['modelV2'].orientationRate.z)
       vel_plan = np.array(sm['modelV2'].velocity.x)
       curvature = abs(sm['controlsState'].curvature)
     except (AttributeError, TypeError, ValueError, KeyError):
-      self.max_pred_lat_acc = 0.
-      self.v_target = self.v_cruise_setpoint
+      self._reset_calculations()
       return
 
     n = min(len(rate_plan), len(vel_plan))
     if n == 0:
-      self.max_pred_lat_acc = 0.
-      self.v_target = self.v_cruise_setpoint
+      self._reset_calculations()
       return
 
     self.current_lat_acc = self.v_ego ** 2 * curvature
@@ -131,8 +142,8 @@ class SmartCruiseControlVision:
           elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH:
             self.state = VisionState.entering
         elif self.state == VisionState.overriding:
-          if not self.long_override:
-            self.state = VisionState.enabled
+          # reached only when long_override just went False (the elif above catches it otherwise)
+          self.state = VisionState.enabled
         elif self.state == VisionState.entering:
           if self.current_lat_acc >= _TURNING_LAT_ACC_TH:
             self.state = VisionState.turning

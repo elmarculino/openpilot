@@ -6,6 +6,7 @@ from opendbc.car.interfaces import MAX_CTRL_SPEED
 from opendbc.car.toyota.values import ToyotaFlags
 
 from openpilot.selfdrive.selfdrived.events import Events
+from openpilot.selfdrive.selfdrived.mads_h6 import uses_h6_mads
 
 ButtonType = structs.CarState.ButtonEvent.Type
 GearShifter = structs.CarState.GearShifter
@@ -141,7 +142,9 @@ class CarEvents:
       events.add(EventName.steerDisengage)
     if CS.brakePressed and CS.standstill:
       # H6 MK4 MADS: allow lat engage with foot on the brake (standstill / speed bump).
-      if not (self.CP.brand == 'gwm' and not self.CP.pcmCruise):
+      # Safe for ACC too because mk4_stalk.update_mk4_down_gestures refuses to latch any gesture
+      # below abs(v_ego) > 0.5 -- see test_mk4_stalk.test_standstill_emits_no_gesture_at_all.
+      if not uses_h6_mads(self.CP):
         events.add(EventName.preEnableStandstill)
     if CS.gasPressed:
       events.add(EventName.gasPressedOverride)

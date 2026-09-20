@@ -22,7 +22,7 @@ from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
-from openpilot.selfdrive.selfdrived.mads_h6 import H6Mads
+from openpilot.selfdrive.selfdrived.mads_h6 import H6Mads, uses_h6_mads
 
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware import HARDWARE
@@ -133,7 +133,7 @@ class SelfdriveD:
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
-    self.mads = H6Mads() if (self.CP.brand == 'gwm' and not self.CP.pcmCruise) else None
+    self.mads = H6Mads() if uses_h6_mads(self.CP) else None
 
     # Determine startup event
     self.startup_event = EventName.startup if build_metadata.openpilot.comma_remote and build_metadata.tested_channel else EventName.startupMaster
