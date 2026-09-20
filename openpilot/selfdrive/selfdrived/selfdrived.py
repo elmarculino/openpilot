@@ -132,6 +132,9 @@ class SelfdriveD:
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
+    # H6 MK4: ACC and LKAS are independent. Brake/regen drop long only.
+    self.mads_h6 = self.CP.brand == 'gwm' and not self.CP.pcmCruise
+    self.long_enabled = False
 
     # Determine startup event
     self.startup_event = EventName.startup if build_metadata.openpilot.comma_remote and build_metadata.tested_channel else EventName.startupMaster
@@ -248,10 +251,29 @@ class SelfdriveD:
           # body always wants to enable
           self.events.add(EventName.pcmEnable)
 
-      # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
-      if (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
-        (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
-        (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
+      # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0.
+      # H6 MK4: brake/regen cancel ACC only (MADS). Stalk UP still drops both.
+      user_brake = (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
+                   (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill))
+      user_gas = CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator
+      if self.mads_h6:
+        if user_brake:
+          self.long_enabled = False
+        if user_gas:
+          self.events.add(EventName.pedalPressed)
+        lkas_tap = any(be.type == ButtonType.lkas and be.pressed for be in CS.buttonEvents)
+        if lkas_tap:
+          if self.enabled and not self.long_enabled:
+            self.events.add(EventName.buttonCancel)
+          elif not self.enabled:
+            self.events.add(EventName.buttonEnable)
+            self.long_enabled = False
+        if CS.buttonEnable:
+          self.long_enabled = True
+        if self.enabled and not self.long_enabled:
+          self.events.add(EventName.gasPressedOverride)
+        self.events.events = [e for e in self.events.events if e != EventName.preEnableStandstill]
+      elif user_gas or user_brake:
         self.events.add(EventName.pedalPressed)
 
     # Create events for temperature, disk space, and memory
@@ -558,6 +580,8 @@ class SelfdriveD:
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
+    if not self.enabled:
+      self.long_enabled = False
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
