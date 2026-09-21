@@ -77,7 +77,12 @@ class SmartCruiseControlVision:
 
   def get_v_target_from_control(self) -> float:
     if self.is_active:
-      return max(self.v_target, MIN_V) + self.a_target * _NO_OVERSHOOT_TIME_HORIZON
+      # MIN_V floors the curve solution, but the no-overshoot term is a decel (down to -1 m/s^2 in
+      # `entering`), so 4 s of it lands ~4 m/s under the floor -- below the 20 km/h entry gate the
+      # state machine itself respects. Clamp after adding it so a later threshold tweak cannot ask
+      # for a near-stop by accident (PR #2 review). The floor is not a target: longitudinal_planner
+      # only ever reads this through min() against v_cruise.
+      return max(max(self.v_target, MIN_V) + self.a_target * _NO_OVERSHOOT_TIME_HORIZON, MIN_V)
     return V_TARGET_UNSET
 
   def _read_enabled(self) -> bool:

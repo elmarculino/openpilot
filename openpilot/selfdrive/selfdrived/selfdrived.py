@@ -606,11 +606,17 @@ class SelfdriveD:
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
-    if self.mads is not None and not self.enabled:
-      self.mads.reset()
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
+
+    # After the publish, not before: `controlsMismatch` is ET.IMMEDIATE_DISABLE, so the frame
+    # `data_sample` latches `mismatch` is the same frame `enabled` goes false. Resetting first
+    # cleared both fields before they were ever logged -- a route showed mismatchFrames climb to
+    # MISMATCH_FRAMES - 1 and then drop to 0, with `mismatch` never true (PR #2 review). The next
+    # frame's update_events still sees a clean slate, which is all the state machine needs.
+    if self.mads is not None and not self.enabled:
+      self.mads.reset()
 
     self.CS_prev = CS
 

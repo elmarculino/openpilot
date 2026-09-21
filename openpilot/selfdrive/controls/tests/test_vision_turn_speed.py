@@ -210,3 +210,15 @@ def test_curve_solution_is_si():
   assert math.isclose(scc.v_target, expected, rel_tol=1e-9)
   # and it is a road speed in m/s, not a km/h number that slipped through
   assert MIN_V < scc.v_target < V_CRUISE_MS
+
+
+def test_output_v_target_never_lands_under_the_entry_gate():
+  # The no-overshoot term is a decel, so `max(v_target, MIN_V) + a_target * 4 s` used to fall
+  # ~4 m/s below the floor -- under the 20 km/h gate the state machine itself respects
+  # (PR #2 review). Worst case: active, v_target already at the floor, hardest decel.
+  scc = SmartCruiseControlVision(enabled=True)
+  _drive_into_turn(scc, MIN_V + 5)
+  assert scc.is_active
+  scc.v_target = 0.0
+  scc.a_target = -1.0
+  assert scc.get_v_target_from_control() == MIN_V

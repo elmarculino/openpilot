@@ -119,6 +119,99 @@ def test_detent_without_brake_still_takes_long():
   assert m.long_enabled
 
 
+def test_brake_then_gentle_same_cycle_keeps_lat():
+  # ACC+lat, then the pedal and the stalk release land on the same frame. The brake already
+  # dropped ACC, so the gesture is asking for what it got -- it must not read as the lat-only
+  # toggle-off (PR #2 review, mads_h6.py:85).
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
+  assert not want_cancel
+  assert override
+  assert not m.long_enabled
+  assert m.override_source == OVERRIDE_BRAKE
+
+
+def test_brake_then_gentle_next_frame_keeps_lat():
+  # the cross-frame shape: pull gentle DOWN from ACC+lat, brake during the hold, release the
+  # stalk while the pedal is still down. `user_brake` is level triggered, so long_enabled was
+  # cleared frames earlier.
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  for _ in range(5):
+    m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  assert not m.long_enabled
+  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
+  assert not want_cancel
+  assert override
+
+
+def test_gentle_after_brake_released_keeps_lat():
+  # same gesture, pedal up before the stalk release: the cause logged is then the driver's own
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  _, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert not want_cancel
+  assert override
+  assert m.override_source == OVERRIDE_LATERAL_ONLY
+
+
+def test_second_gentle_after_a_brake_drop_cancels():
+  # the latch is spent by the first gesture: from there the car really is in lat-only and a
+  # gentle DOWN means off
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  _, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert want_cancel
+  assert not override
+
+
+def test_brake_while_lat_only_then_gentle_still_cancels():
+  # no ACC was ever live, so the brake latches nothing and the gesture keeps its plain meaning
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
+  assert want_cancel
+  assert not override
+
+
+def test_detent_under_brake_then_gentle_cancels():
+  # engaging under the pedal is a deliberate lat-only, not a brake-dropped ACC: the next gentle
+  # is the toggle-off
+  m = H6Mads()
+  m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
+  assert want_cancel
+  assert not override
+
+
+def test_re_engaging_acc_spends_the_brake_latch():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert m.long_enabled
+  # gentle drops ACC again (long branch), and the one after that cancels
+  _, want_cancel, _ = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert not want_cancel
+  _, want_cancel, _ = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert want_cancel
+
+
+def test_disengage_clears_the_brake_latch():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  assert m.brake_dropped_long
+  m.reset()
+  assert not m.brake_dropped_long
+
+
 def test_brake_release_after_engaging_under_brake_does_not_resume_long():
   # long stays off until the driver asks for it again -- release alone must not silently resume ACC
   m = H6Mads()

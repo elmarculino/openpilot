@@ -40,12 +40,14 @@ class H6Mads:
     self.mismatch_counter = 0
     self.mismatch = False
     self.override_source = OVERRIDE_NONE
+    self.brake_dropped_long = False
 
   def reset(self) -> None:
     self.long_enabled = False
     self.mismatch_counter = 0
     self.mismatch = False
     self.override_source = OVERRIDE_NONE
+    self.brake_dropped_long = False
 
   def data_sample(self, panda_states, engaged: bool) -> None:
     """Flag a MADS engagement the panda is not backing.
@@ -78,7 +80,17 @@ class H6Mads:
     want_enable = False
     want_cancel = False
 
+    if not engaged:
+      # nothing to carry across a disengage
+      self.brake_dropped_long = False
+
     if user_brake:
+      # Remember that the pedal, not the stalk, is what took ACC away. `user_brake` is level
+      # triggered while moving (selfdrived.py: true for the whole hold), and a gentle DOWN only
+      # fires `lkas_tap` on release (mk4_stalk.py), so by then `long_enabled` is already false.
+      # Without this latch that release reads as the lat-only toggle-off and steering drops --
+      # the opposite of "brake keeps LKAS" (PR #2 review, mads_h6.py:85).
+      self.brake_dropped_long = self.brake_dropped_long or self.long_enabled
       self.long_enabled = False
       self.override_source = OVERRIDE_BRAKE
 
@@ -90,6 +102,13 @@ class H6Mads:
       elif self.long_enabled:
         self.long_enabled = False
         self.override_source = OVERRIDE_LATERAL_ONLY
+      elif self.brake_dropped_long:
+        # The press started while ACC was live, so the gesture asks for exactly what the brake
+        # already did: drop ACC, keep steering. Consume the latch -- a second gentle, one that
+        # starts in lat-only, must still cancel (test_gentle_from_lat_only_cancels).
+        self.brake_dropped_long = False
+        # with the pedal still down the brake is the honest cause; once it is up, the gesture is
+        self.override_source = OVERRIDE_BRAKE if user_brake else OVERRIDE_LATERAL_ONLY
       else:
         want_cancel = True
 
@@ -102,6 +121,8 @@ class H6Mads:
       # foot on the pedal (the panda blocks the TX either way, but the two layers must agree).
       self.long_enabled = not user_brake
       self.override_source = OVERRIDE_BRAKE if user_brake else OVERRIDE_NONE
+      # the driver just spoke about ACC directly, so the earlier brake drop is spent either way
+      self.brake_dropped_long = False
 
     override_long = (engaged or want_enable) and not self.long_enabled and not want_cancel
     # The source only means anything while overriding, so clear it rather than let a stale cause
