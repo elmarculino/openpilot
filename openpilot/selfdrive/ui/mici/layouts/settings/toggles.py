@@ -137,8 +137,7 @@ class TogglesLayoutMici(NavScroller):
         self._scc_v_toggle.set_visible(False)
         self._scc_v_toggle.set_checked(False)
         ui_state.params.remove("ExperimentalMode")
-        # not remove(): this key declares a "1" default, so removing it would read back as True
-        ui_state.params.put_bool("SmartCruiseControlVision", False)
+        ui_state.params.remove("SmartCruiseControlVision")
 
     # Refresh toggles from params to mirror external changes
     for key, item in self._refresh_toggles:

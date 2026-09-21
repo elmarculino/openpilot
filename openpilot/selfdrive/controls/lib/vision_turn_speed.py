@@ -5,7 +5,6 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 MIT License.
 """
 from enum import IntEnum
-from typing import Any
 
 import numpy as np
 
@@ -48,16 +47,16 @@ _LEAVING_ACC = 0.5
 
 
 class SmartCruiseControlVision:
-  v_target: float = 0.
-  a_target: float = 0.
-  v_ego: float = 0.
-  a_ego: float = 0.
-  output_v_target: float = V_TARGET_UNSET
-  output_a_target: float = 0.
-
   def __init__(self, enabled: bool | None = None):
+    self.v_target = 0.
+    self.a_target = 0.
+    self.v_ego = 0.
+    self.a_ego = 0.
+    self.output_v_target = V_TARGET_UNSET
+    self.output_a_target = 0.
+
     self.params = Params()
-    self.frame = -1
+    self.frame = 0
     self.long_enabled = False
     self.long_override = False
     self.is_enabled = False
@@ -83,7 +82,7 @@ class SmartCruiseControlVision:
     try:
       return self.params.get_bool("SmartCruiseControlVision")
     except UnknownKeyName:
-      return True
+      return False
 
   def _update_params(self) -> None:
     if self._enabled_override is not None:
@@ -98,7 +97,7 @@ class SmartCruiseControlVision:
     self.max_pred_lat_acc = 0.
     self.v_target = self.v_cruise_setpoint
 
-  def _update_calculations(self, sm: Any) -> None:
+  def _update_calculations(self, sm) -> None:
     if not self.long_enabled:
       return
 
@@ -106,6 +105,9 @@ class SmartCruiseControlVision:
       rate_plan = np.abs(sm['modelV2'].orientationRate.z)
       vel_plan = np.array(sm['modelV2'].velocity.x)
       curvature = abs(sm['controlsState'].curvature)
+    # Broad on purpose: a model dropout must release the decel rather than kill plannerd.
+    # test_missing_model_fields_do_not_raise / test_model_dropout_mid_turn_releases_decel cover
+    # the KeyError and AttributeError paths -- do not narrow this.
     except (AttributeError, TypeError, ValueError, KeyError):
       self._reset_calculations()
       return
@@ -173,7 +175,7 @@ class SmartCruiseControlVision:
       return _LEAVING_ACC
     raise NotImplementedError(f"SCC-V state not supported: {self.state}")
 
-  def update(self, sm: Any, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float,
+  def update(self, sm, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float,
              v_cruise_setpoint: float) -> None:
     self.long_enabled = long_enabled
     self.long_override = long_override

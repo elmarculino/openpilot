@@ -4,12 +4,9 @@ Gentle DOWN toggles lateral only. Detent engages both. Brake/regen
 drops ACC and keeps LKAS. Stalk UP cancels both (handled as buttonCancel
 outside this helper).
 """
-from __future__ import annotations
-
-from typing import Any
 
 
-def uses_h6_mads(CP: Any) -> bool:
+def uses_h6_mads(CP) -> bool:
   """Single source of truth for the MADS-lite gate.
 
   selfdrived (which events to raise) and car_events (which to suppress) must agree, so keep

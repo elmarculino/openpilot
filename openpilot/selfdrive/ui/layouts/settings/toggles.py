@@ -187,8 +187,7 @@ class TogglesLayout(Widget):
         self._toggles["SmartCruiseControlVision"].action_item.set_enabled(False)
         self._toggles["SmartCruiseControlVision"].action_item.set_state(False)
         self._params.remove("ExperimentalMode")
-        # not remove(): this key declares a "1" default, so removing it would read back as True
-        self._params.put_bool("SmartCruiseControlVision", False)
+        self._params.remove("SmartCruiseControlVision")
 
         unavailable = tr("Experimental mode is currently unavailable on this car since the car's stock ACC is used for longitudinal control.")
 

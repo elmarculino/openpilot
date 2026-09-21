@@ -270,6 +270,9 @@ class SelfdriveD:
         if want_enable:
           self.events.add(EventName.buttonEnable)
         if override_long:
+          # Reused for a brake-held override: this event carries ET.OVERRIDE_LONGITUDINAL with an
+          # empty AlertSize.none alert, so nothing about the gas pedal is shown. A dedicated event
+          # would burn an EventName ordinal that upstream will reuse.
           self.events.add(EventName.gasPressedOverride)
       elif user_gas or user_brake:
         self.events.add(EventName.pedalPressed)
