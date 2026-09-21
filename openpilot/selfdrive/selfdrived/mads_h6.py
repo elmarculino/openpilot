@@ -4,6 +4,16 @@ Gentle DOWN toggles lateral only. Detent engages both. Brake/regen
 drops ACC and keeps LKAS. Stalk UP cancels both (handled as buttonCancel
 outside this helper).
 """
+from opendbc.car.structs import car
+from openpilot.common.realtime import DT_CTRL
+from openpilot.common.swaglog import cloudlog
+
+SafetyModel = car.CarParams.SafetyModel
+IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+
+# pandaStates publishes at 10 Hz against a 100 Hz control loop, so sm['pandaStates'] can still hold a
+# pre-arm sample for ~10 frames after MADS engages. 50 frames (0.5 s) clears that skew with margin.
+MISMATCH_FRAMES = int(0.5 / DT_CTRL)
 
 
 def uses_h6_mads(CP) -> bool:
@@ -18,9 +28,39 @@ def uses_h6_mads(CP) -> bool:
 class H6Mads:
   def __init__(self) -> None:
     self.long_enabled = False
+    self.mismatch_counter = 0
+    self.mismatch = False
 
   def reset(self) -> None:
     self.long_enabled = False
+    self.mismatch_counter = 0
+    self.mismatch = False
+
+  def data_sample(self, panda_states, engaged: bool) -> None:
+    """Flag a MADS engagement the panda is not backing.
+
+    selfdrived already counts this (`mismatch_counter >= 200`) but needs 2 s, and pcmCruise=False
+    cars arm the panda off a stalk gesture the panda tracks itself -- so the two layers can disagree
+    from the very first frame with nothing in the log but pandaStates. Route 000000fd--3227e9ca98:
+    openpilot held `enabled` for 1.4 s while the panda sat at controls_allowed=0 and rejected every
+    TX, too short to reach 200 frames, so no alert and no event were ever raised. Trip at 0.5 s.
+    """
+    if not engaged:
+      self.mismatch_counter = 0
+      self.mismatch = False
+      return
+
+    allowed = [ps.controlsAllowed for ps in panda_states if ps.safetyModel not in IGNORED_SAFETY_MODES]
+    # an empty list means every panda is silent/noOutput: nothing is expected to allow controls
+    if allowed and not any(allowed):
+      self.mismatch_counter += 1
+    else:
+      self.mismatch_counter = 0
+
+    if self.mismatch_counter >= MISMATCH_FRAMES and not self.mismatch:
+      # latched until disengage: the event is IMMEDIATE_DISABLE, so that follows within a frame
+      self.mismatch = True
+      cloudlog.error("mads_h6: engaged with no panda allowing controls, disengaging")
 
   def update(self, *, engaged: bool, user_brake: bool, lkas_tap: bool, acc_enable: bool) -> tuple[bool, bool, bool]:
     """Returns (want_enable, want_cancel, override_long)."""

@@ -256,6 +256,12 @@ class SelfdriveD:
                    (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill))
       user_gas = CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator
       if self.mads is not None:
+        # MADS-lite arms the panda off a stalk gesture the panda edge-detects itself, so the two
+        # layers can disagree from the first engaged frame. Upstream's counter needs 2 s; this one
+        # trips at 0.5 s (see H6Mads.data_sample).
+        self.mads.data_sample(self.sm['pandaStates'], self.enabled)
+        if self.mads.mismatch:
+          self.events.add(EventName.controlsMismatch)
         if user_gas:
           self.events.add(EventName.pedalPressed)
         lkas_tap = any(be.type == ButtonType.lkas and be.pressed for be in CS.buttonEvents)
