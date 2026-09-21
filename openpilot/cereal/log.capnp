@@ -1239,6 +1239,16 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   allowThrottle @38: Bool;
   allowBrake @39: Bool;
 
+  # SCC-V debug. A group keeps the ordinals contiguous; every field is a raw input or output of
+  # the state machine, so a route alone is enough to tune the thresholds in vision_turn_speed.py.
+  sccv :group {
+    state @40 :SmartCruiseControlVisionState;
+    currentLatAcc @41 :Float32;   # m/s^2, v_ego^2 * curvature -- drives turning/leaving/finish
+    maxPredLatAcc @42 :Float32;   # m/s^2, 97th pct of the model's predicted lat accel -- drives entering
+    vTarget @43 :Float32;         # m/s, speed the curve solution asks for
+    aTarget @44 :Float32;         # m/s^2, accel the state machine commands
+  }
+
 
   solverExecutionTime @35 :Float32;
 
@@ -1248,6 +1258,17 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
     lead1 @2;
     lead2 @3;
     e2e @4;
+    turnSpeed @5;
+  }
+
+  # SCC-V (slow for curves) state machine. Fork addition, see opendbc/car/gwm/README.md item 8.
+  enum SmartCruiseControlVisionState {
+    disabled @0;
+    enabled @1;
+    entering @2;
+    turning @3;
+    leaving @4;
+    overriding @5;
   }
 
 

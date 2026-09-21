@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib.vision_turn_speed import (
   MIN_V,
   SmartCruiseControlVision,
@@ -8,6 +9,8 @@ from openpilot.selfdrive.controls.lib.vision_turn_speed import (
   _ENTERING_PRED_LAT_ACC_TH,
   _TURNING_LAT_ACC_TH,
 )
+
+LongitudinalPlanSource = log.LongitudinalPlan.LongitudinalPlanSource
 
 
 def _sm(pred_lat_acc: float, n: int = 33, curvature: float = 0.0):
@@ -135,3 +138,52 @@ def test_empty_model_path_mid_turn_releases_decel():
   assert scc.current_lat_acc == 0.0
   assert scc.state == VisionState.leaving
   assert scc.output_a_target >= 0.0
+
+
+# --- logging (README items 6 and 8) -------------------------------------------------------------
+# The whole point of these fields is that a single route is enough to tune the thresholds above.
+# They are published by LongitudinalPlanner.publish(); building a planner needs acados, so these
+# exercise the schema and the Python->capnp coupling instead, which is where the breakage lives.
+
+def test_turn_speed_is_its_own_plan_source():
+  # item 6: SCC-V braking used to be labelled `cruise`, making it indistinguishable in a route
+  names = [str(e) for e in LongitudinalPlanSource.schema.enumerants]
+  assert "turnSpeed" in names
+  # appended, never renumbered: an existing ordinal would silently remap old routes
+  assert names.index("cruise") == 0 and names.index("e2e") == 4
+
+
+def test_sccv_debug_fields_exist():
+  # item 8: the state machine was invisible in a route
+  fields = log.LongitudinalPlan.Sccv.schema.fieldnames
+  assert set(fields) == {"state", "currentLatAcc", "maxPredLatAcc", "vTarget", "aTarget"}
+
+
+def test_every_vision_state_is_loggable():
+  # publish() assigns VisionState(...).name straight into the capnp enum, so a state added to the
+  # IntEnum without a matching enumerant raises on the car, in plannerd, mid-drive.
+  loggable = {str(e) for e in log.LongitudinalPlan.SmartCruiseControlVisionState.schema.enumerants}
+  assert {s.name for s in VisionState} == loggable
+  for state in VisionState:
+    assert log.LongitudinalPlan.SmartCruiseControlVisionState.schema.enumerants[state.name] == state.value
+
+
+def test_sccv_state_round_trips_through_a_log():
+  scc = SmartCruiseControlVision(enabled=True)
+  _drive_into_turn(scc, MIN_V + 5)
+
+  ev = log.Event.new_message()
+  plan = ev.init('longitudinalPlan')
+  plan.longitudinalPlanSource = LongitudinalPlanSource.turnSpeed
+  plan.sccv.state = VisionState(scc.state).name
+  plan.sccv.currentLatAcc = float(scc.current_lat_acc)
+  plan.sccv.maxPredLatAcc = float(scc.max_pred_lat_acc)
+  plan.sccv.vTarget = float(scc.v_target)
+  plan.sccv.aTarget = float(scc.a_target)
+
+  with log.Event.from_bytes(ev.to_bytes()) as read_back:
+    sccv = read_back.longitudinalPlan.sccv
+    assert str(read_back.longitudinalPlan.longitudinalPlanSource) == "turnSpeed"
+    assert str(sccv.state) == "turning"
+    assert sccv.currentLatAcc >= _TURNING_LAT_ACC_TH
+    assert sccv.aTarget < 0.0

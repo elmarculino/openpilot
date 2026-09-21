@@ -13,7 +13,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.vision_turn_speed import SmartCruiseControlVision
+from openpilot.selfdrive.controls.lib.vision_turn_speed import SmartCruiseControlVision, VisionState
 from openpilot.common.swaglog import cloudlog
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
@@ -148,7 +148,9 @@ class LongitudinalPlanner:
     if sm['selfdriveState'].experimentalMode:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
     if self.scc_v.is_active:
-      candidates.append((self.scc_v.output_a_target, LongitudinalPlanSource.cruise, False))
+      # Its own source, not `cruise`: otherwise a route cannot tell curve braking from cruise
+      # braking and the SCC-V thresholds are untunable from logs.
+      candidates.append((self.scc_v.output_a_target, LongitudinalPlanSource.turnSpeed, False))
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
@@ -178,5 +180,14 @@ class LongitudinalPlanner:
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
+
+    # SCC-V debug, published every cycle including while disabled -- a gap in the trace would be
+    # ambiguous between "feature off" and "plannerd stalled".
+    sccv = longitudinalPlan.sccv
+    sccv.state = VisionState(self.scc_v.state).name
+    sccv.currentLatAcc = float(self.scc_v.current_lat_acc)
+    sccv.maxPredLatAcc = float(self.scc_v.max_pred_lat_acc)
+    sccv.vTarget = float(self.scc_v.v_target)
+    sccv.aTarget = float(self.scc_v.a_target)
 
     pm.send('longitudinalPlan', plan_send)
