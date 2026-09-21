@@ -73,7 +73,12 @@ class SelfdriveD:
     self.big_model_ready_t = 0.
 
     # Setup sockets
-    self.pm = messaging.PubMaster(['selfdriveState', 'onroadEvents'])
+    # madsState is only ever sent on MADS-lite cars, so do not claim the socket elsewhere --
+    # services.py declares it at 100 Hz and an always-idle publisher would misreport that.
+    pubs = ['selfdriveState', 'onroadEvents']
+    if uses_h6_mads(self.CP):
+      pubs.append('madsState')
+    self.pm = messaging.PubMaster(pubs)
 
     self.gps_location_service = get_gps_location_service(self.params)
     self.gps_packets = [self.gps_location_service]
@@ -278,7 +283,9 @@ class SelfdriveD:
         if override_long:
           # Reused for a brake-held override: this event carries ET.OVERRIDE_LONGITUDINAL with an
           # empty AlertSize.none alert, so nothing about the gas pedal is shown. A dedicated event
-          # would burn an EventName ordinal that upstream will reuse.
+          # would burn an EventName ordinal that upstream will reuse. `madsState.overrideSource`
+          # carries the real cause so a route does not read as "gas pressed" with a foot on
+          # the brake -- see opendbc/car/gwm/README.md item 7.
           self.events.add(EventName.gasPressedOverride)
       elif user_gas or user_brake:
         self.events.add(EventName.pedalPressed)
@@ -573,6 +580,18 @@ class SelfdriveD:
     ss.alertHudVisual = self.AM.current_alert.visual_alert
 
     self.pm.send('selfdriveState', ss_msg)
+
+    # MADS-lite debug. Sent unconditionally on H6 so the trace is continuous; `overrideSource` is
+    # the field that disambiguates the reused `gasPressedOverride` event (README item 7).
+    if self.mads is not None:
+      mads_msg = messaging.new_message('madsState')
+      mads_msg.valid = True
+      ms = mads_msg.madsState
+      ms.longEnabled = self.mads.long_enabled
+      ms.overrideSource = self.mads.override_source
+      ms.mismatch = self.mads.mismatch
+      ms.mismatchFrames = min(self.mads.mismatch_counter, 0xFFFF)
+      self.pm.send('madsState', mads_msg)
 
     # onroadEvents - logged every second or on change
     if (self.sm.frame % int(1. / DT_CTRL) == 0) or (self.events.names != self.events_prev):

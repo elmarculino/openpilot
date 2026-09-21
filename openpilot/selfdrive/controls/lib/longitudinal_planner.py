@@ -181,13 +181,17 @@ class LongitudinalPlanner:
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
 
-    # SCC-V debug, published every cycle including while disabled -- a gap in the trace would be
-    # ambiguous between "feature off" and "plannerd stalled".
-    sccv = longitudinalPlan.sccv
+    pm.send('longitudinalPlan', plan_send)
+
+    # SCC-V debug, sent every cycle including while disabled -- a gap in the trace would be
+    # ambiguous between "feature off" and "plannerd stalled". Its own message on a reserved
+    # custom.capnp slot rather than a group in longitudinalPlan, which upstream renumbers.
+    sccv_send = messaging.new_message('sccvState')
+    sccv_send.valid = plan_send.valid
+    sccv = sccv_send.sccvState
     sccv.state = VisionState(self.scc_v.state).name
     sccv.currentLatAcc = float(self.scc_v.current_lat_acc)
     sccv.maxPredLatAcc = float(self.scc_v.max_pred_lat_acc)
     sccv.vTarget = float(self.scc_v.v_target)
     sccv.aTarget = float(self.scc_v.a_target)
-
-    pm.send('longitudinalPlan', plan_send)
+    pm.send('sccvState', sccv_send)

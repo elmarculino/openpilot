@@ -15,6 +15,15 @@ IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 # pre-arm sample for ~10 frames after MADS engages. 50 frames (0.5 s) clears that skew with margin.
 MISMATCH_FRAMES = int(0.5 / DT_CTRL)
 
+# Why longitudinal is overridden, for the log. The event raised for it is `gasPressedOverride`,
+# reused for its ET.OVERRIDE_LONGITUDINAL and empty AlertSize.none alert -- so without this a
+# brake-held override reads as "gas pressed" with the driver's foot nowhere near the accelerator.
+# Names, and their order, must match custom.capnp MadsState.OverrideSource; test_mads_h6 pins it.
+OVERRIDE_NONE = "none"
+OVERRIDE_BRAKE = "brake"
+OVERRIDE_LATERAL_ONLY = "lateralOnly"
+OVERRIDE_SOURCES = (OVERRIDE_NONE, OVERRIDE_BRAKE, OVERRIDE_LATERAL_ONLY)
+
 
 def uses_h6_mads(CP) -> bool:
   """Single source of truth for the MADS-lite gate.
@@ -30,11 +39,13 @@ class H6Mads:
     self.long_enabled = False
     self.mismatch_counter = 0
     self.mismatch = False
+    self.override_source = OVERRIDE_NONE
 
   def reset(self) -> None:
     self.long_enabled = False
     self.mismatch_counter = 0
     self.mismatch = False
+    self.override_source = OVERRIDE_NONE
 
   def data_sample(self, panda_states, engaged: bool) -> None:
     """Flag a MADS engagement the panda is not backing.
@@ -69,13 +80,16 @@ class H6Mads:
 
     if user_brake:
       self.long_enabled = False
+      self.override_source = OVERRIDE_BRAKE
 
     if lkas_tap:
       if not engaged:
         want_enable = True
         self.long_enabled = False
+        self.override_source = OVERRIDE_LATERAL_ONLY
       elif self.long_enabled:
         self.long_enabled = False
+        self.override_source = OVERRIDE_LATERAL_ONLY
       else:
         want_cancel = True
 
@@ -87,6 +101,11 @@ class H6Mads:
       # State.enabled instead of State.overriding -- the FSM would believe long is live with a
       # foot on the pedal (the panda blocks the TX either way, but the two layers must agree).
       self.long_enabled = not user_brake
+      self.override_source = OVERRIDE_BRAKE if user_brake else OVERRIDE_NONE
 
     override_long = (engaged or want_enable) and not self.long_enabled and not want_cancel
+    # The source only means anything while overriding, so clear it rather than let a stale cause
+    # sit in the log for the rest of the drive.
+    if not override_long:
+      self.override_source = OVERRIDE_NONE
     return want_enable, want_cancel, override_long

@@ -1,8 +1,16 @@
 from types import SimpleNamespace
 
 from opendbc.car.structs import car
+from openpilot.cereal import custom, log
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.selfdrived.mads_h6 import H6Mads, MISMATCH_FRAMES
+from openpilot.selfdrive.selfdrived.mads_h6 import (
+  H6Mads,
+  MISMATCH_FRAMES,
+  OVERRIDE_BRAKE,
+  OVERRIDE_LATERAL_ONLY,
+  OVERRIDE_NONE,
+  OVERRIDE_SOURCES,
+)
 
 SafetyModel = car.CarParams.SafetyModel
 
@@ -203,3 +211,92 @@ def test_route_000000fd_phantom_engage_is_caught():
   assert frames < 200
   _run(m, [_panda(False)], frames)
   assert m.mismatch
+
+
+# --- override source (README item 7) -------------------------------------------------------------
+# `gasPressedOverride` is reused for the brake-held override because of its ET and empty alert, so
+# the log said "gas pressed" with a foot on the brake. madsState.overrideSource carries the cause.
+
+def test_override_source_matches_the_log_schema():
+  # publish_selfdriveState() assigns these strings straight into the capnp enum, so a source added
+  # here without a matching enumerant raises in selfdrived, on the car, mid-drive.
+  loggable = [str(e) for e in custom.MadsState.OverrideSource.schema.enumerants]
+  assert list(OVERRIDE_SOURCES) == loggable
+
+
+def test_brake_override_is_not_reported_as_gas():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert m.override_source == OVERRIDE_NONE  # long is live, nothing overridden
+  _, _, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  assert override
+  assert m.override_source == OVERRIDE_BRAKE
+
+
+def test_engaging_under_brake_reports_brake():
+  # the same-cycle case: detent and brake together is lat-only, and the brake is the reason
+  m = H6Mads()
+  _, _, override = m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  assert override
+  assert m.override_source == OVERRIDE_BRAKE
+
+
+def test_gentle_gesture_reports_lateral_only():
+  m = H6Mads()
+  _, _, override = m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert override
+  assert m.override_source == OVERRIDE_LATERAL_ONLY
+
+
+def test_dropping_acc_from_both_reports_lateral_only():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert override
+  assert m.override_source == OVERRIDE_LATERAL_ONLY
+
+
+def test_override_source_clears_when_long_comes_back():
+  # a stale cause must not sit in the log for the rest of the drive
+  m = H6Mads()
+  m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  assert m.override_source == OVERRIDE_BRAKE
+  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert not override
+  assert m.override_source == OVERRIDE_NONE
+
+
+def test_override_source_clears_on_cancel():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  _, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert want_cancel and not override
+  assert m.override_source == OVERRIDE_NONE
+
+
+def test_reset_clears_override_source():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  assert m.override_source == OVERRIDE_BRAKE
+  m.reset()
+  assert m.override_source == OVERRIDE_NONE
+
+
+def test_mads_state_round_trips_through_a_log():
+  m = H6Mads()
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  m.mismatch_counter = MISMATCH_FRAMES
+
+  ev = log.Event.new_message()
+  out = ev.init('madsState')
+  out.longEnabled = m.long_enabled
+  out.overrideSource = m.override_source
+  out.mismatch = m.mismatch
+  out.mismatchFrames = min(m.mismatch_counter, 0xFFFF)
+
+  with log.Event.from_bytes(ev.to_bytes()) as read_back:
+    ms = read_back.madsState
+    assert not ms.longEnabled
+    assert str(ms.overrideSource) == "brake"
+    assert ms.mismatchFrames == MISMATCH_FRAMES

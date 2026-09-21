@@ -9,7 +9,6 @@ from enum import IntEnum
 import numpy as np
 
 from openpilot.common.constants import CV
-from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import DT_MDL
 
 MIN_V = 20 * CV.KPH_TO_MS  # do not operate under 20 km/h
@@ -55,7 +54,10 @@ class SmartCruiseControlVision:
     self.output_v_target = V_TARGET_UNSET
     self.output_a_target = 0.
 
-    self.params = Params()
+    # An explicit `enabled` pins the toggle, and then Params is never touched. Deferred to
+    # _read_enabled because common.params does a module-level ctypes.CDLL of libparams_c, which is
+    # what kept test_vision_turn_speed from running off-device (PR #2 review).
+    self.params = None
     self.frame = 0
     self.long_enabled = False
     self.long_override = False
@@ -79,6 +81,9 @@ class SmartCruiseControlVision:
     return V_TARGET_UNSET
 
   def _read_enabled(self) -> bool:
+    from openpilot.common.params import Params, UnknownKeyName  # noqa: PLC0415
+    if self.params is None:
+      self.params = Params()
     try:
       return self.params.get_bool("SmartCruiseControlVision")
     except UnknownKeyName:

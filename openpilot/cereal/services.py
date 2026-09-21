@@ -93,6 +93,11 @@ _services: dict[str, tuple] = {
   "livestreamNarrowRoadEncodeData": (False, 20., None, QueueSize.MEDIUM),
   "livestreamCabinEncodeData": (False, 20., None, QueueSize.MEDIUM),
   "customReservedRawData0": (True, 0.),
+
+  # fork debug (opendbc/car/gwm/README.md items 7 and 8), on the reserved custom.capnp slots.
+  # Same rate as their publisher's own message so the two stay frame-aligned in a route.
+  "sccvState": (True, 20., 10),    # plannerd, alongside longitudinalPlan
+  "madsState": (True, 100., 10),   # selfdrived, alongside selfdriveState
 }
 SERVICE_LIST = {name: Service(*vals) for
                 idx, (name, vals) in enumerate(_services.items())}
