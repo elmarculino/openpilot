@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 from openpilot.cereal import log
@@ -186,4 +187,10 @@ def test_sccv_state_round_trips_through_a_log():
     assert str(read_back.longitudinalPlan.longitudinalPlanSource) == "turnSpeed"
     assert str(sccv.state) == "turning"
     assert sccv.currentLatAcc >= _TURNING_LAT_ACC_TH
-    assert sccv.aTarget < 0.0
+    # Float32 round-trip, so compare against the source values rather than pinning magnitudes:
+    # in `turning` the commanded accel only goes negative past _TURNING_ACC_BP[1].
+    # 1e-6 is just outside float32's ~1.2e-7 relative precision
+    assert math.isclose(sccv.currentLatAcc, scc.current_lat_acc, rel_tol=1e-6)
+    assert math.isclose(sccv.maxPredLatAcc, scc.max_pred_lat_acc, rel_tol=1e-6)
+    assert math.isclose(sccv.vTarget, scc.v_target, rel_tol=1e-6)
+    assert math.isclose(sccv.aTarget, scc.a_target, rel_tol=1e-6)
