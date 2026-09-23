@@ -154,7 +154,10 @@ class CarEvents:
       events.add(EventName.invalidLkasSetting)
     if CS.lowSpeedAlert:
       events.add(EventName.belowSteerSpeed)
-    if CS.buttonEnable:
+    # MADS-lite raises buttonEnable itself (H6Mads.update: detent and gentle DOWN), and has to --
+    # it decides whether a brake in the same cycle turns the enable into lat-only. Adding it here too
+    # only duplicated the event.
+    if CS.buttonEnable and not uses_h6_mads(self.CP):
       events.add(EventName.buttonEnable)
 
     # Handle cancel button presses

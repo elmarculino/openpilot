@@ -85,6 +85,10 @@ class LongitudinalPlanner:
       v_cruise = 0.0
 
     long_active = bool(sm['carControl'].longActive)
+    # cruiseControl.override is only ever true while longActive is false, and SCC-V drops to
+    # `disabled` on that first -- so its `overriding` state is unreachable from here. Kept (not
+    # deleted) for parity with sunnypilot and because the sccvState enum mirrors it; a gas-held
+    # override already shows up as longActive=False.
     self.scc_v.update(sm, long_active, sm['carControl'].cruiseControl.override,
                       v_ego, sm['carState'].aEgo, v_cruise)
     if self.scc_v.is_active:

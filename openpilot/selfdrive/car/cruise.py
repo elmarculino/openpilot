@@ -3,6 +3,8 @@ import numpy as np
 
 from opendbc.car.structs import car
 from openpilot.common.constants import CV
+from openpilot.common.realtime import DT_CTRL
+from openpilot.selfdrive.selfdrived.mads_h6 import uses_h6_mads
 
 
 # WARNING: this value was determined based on the model's training distribution,
@@ -26,6 +28,10 @@ CRUISE_INTERVAL_SIGN = {
   ButtonType.accelCruise: +1,
   ButtonType.decelCruise: -1,
 }
+# MADS-lite: how long a setCruise press stays eligible to be the cause of a longActive rising edge.
+# The press reaches card at frame N, selfdrived/controlsd act on it, and longActive comes back on
+# carControl a frame or two later; 0.5 s absorbs socket skew without matching an unrelated edge.
+LONG_ENGAGE_WINDOW = int(0.5 / DT_CTRL)
 
 
 class VCruiseHelper:
@@ -36,6 +42,29 @@ class VCruiseHelper:
     self.v_cruise_kph_last = 0
     self.button_timers = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0}
     self.button_change_states = {btn: {"standstill": False, "enabled": False} for btn in self.button_timers}
+    self.lat_only_engage = uses_h6_mads(CP)
+    self.set_press_frames = 0
+
+  def should_initialize(self, CS, enabled: bool, enabled_prev: bool, long_active: bool, long_active_prev: bool) -> bool:
+    """Whether to (re)initialize the set speed this frame.
+
+    Upstream: the rising edge of carControl.enabled. MADS-lite adds a second engage: lat-only keeps
+    `enabled` true, so a detent press from lat-only arms ACC with no `enabled` edge, and the set
+    speed would be whatever it was when steering engaged (plus wheel scrolls since) -- engage lat at
+    30 km/h, detent at 100 km/h, and ACC brakes toward 30. Re-initialize on the longActive rising
+    edge, but only when a setCruise press caused it: longActive also rises when a gas override ends,
+    and resetting the set speed to vEgo there would break the normal "overtake, lift, resume".
+    """
+    if self.lat_only_engage:
+      if not long_active and any(b.type == ButtonType.setCruise and b.pressed for b in CS.buttonEvents):
+        self.set_press_frames = LONG_ENGAGE_WINDOW
+      elif self.set_press_frames > 0:
+        self.set_press_frames -= 1
+
+    long_engage = self.set_press_frames > 0 and enabled_prev and long_active and not long_active_prev
+    if long_active or not enabled:
+      self.set_press_frames = 0
+    return (enabled and not enabled_prev) or long_engage
 
   @property
   def v_cruise_initialized(self):
