@@ -32,6 +32,7 @@ SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
 
 LONGITUDINAL_PERSONALITY_MAP = {v: k for k, v in log.LongitudinalPersonality.schema.enumerants.items()}
+STEER_SATURATED_SOUND_COOLDOWN = 30.  # s, GWM only (see alert_sound)
 
 ThermalStatus = log.DeviceState.ThermalStatus
 State = log.SelfdriveState.OpenpilotState
@@ -126,6 +127,9 @@ class SelfdriveD:
     self.mismatch_counter = 0
     self.cruise_mismatch_counter = 0
     self.last_steering_pressed_frame = 0
+    self.steer_saturated_alert_start = -1        # GWM: start_frame of the steerSaturated alert last seen
+    self.steer_saturated_sound_frame = -10**9    # GWM: start_frame of the last steerSaturated alert that sounded
+    self.steer_saturated_audible = True
     self.distance_traveled = 0
     self.last_functional_fan_frame = 0
     self.events_prev = []
@@ -559,6 +563,20 @@ class SelfdriveD:
     self.AM.add_many(self.sm.frame, alerts)
     self.AM.process_alerts(self.sm.frame, clear_event_types)
 
+  def alert_sound(self):
+    alert = self.AM.current_alert
+    if self.CP.brand != "gwm" or not alert.alert_type.startswith("steerSaturated/"):
+      return alert.audible_alert
+    # GWM MK4: sound "turn exceeds limit" at most once per STEER_SATURATED_SOUND_COOLDOWN; later alerts in
+    # that window stay visual-only (routes 107/109: bursts of back-to-back alerts on the same curve).
+    start = self.AM.alerts[alert.alert_type].start_frame
+    if start != self.steer_saturated_alert_start:
+      self.steer_saturated_alert_start = start
+      self.steer_saturated_audible = (start - self.steer_saturated_sound_frame) * DT_CTRL >= STEER_SATURATED_SOUND_COOLDOWN
+      if self.steer_saturated_audible:
+        self.steer_saturated_sound_frame = start
+    return alert.audible_alert if self.steer_saturated_audible else log.SelfdriveState.AudibleAlert.none
+
   def publish_selfdriveState(self, CS):
     # selfdriveState
     ss_msg = messaging.new_message('selfdriveState')
@@ -576,7 +594,7 @@ class SelfdriveD:
     ss.alertSize = self.AM.current_alert.alert_size
     ss.alertStatus = self.AM.current_alert.alert_status
     ss.alertType = self.AM.current_alert.alert_type
-    ss.alertSound = self.AM.current_alert.audible_alert
+    ss.alertSound = self.alert_sound()
     ss.alertHudVisual = self.AM.current_alert.visual_alert
 
     self.pm.send('selfdriveState', ss_msg)
