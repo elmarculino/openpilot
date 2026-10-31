@@ -23,6 +23,7 @@ from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 from openpilot.selfdrive.selfdrived.mads_h6 import H6Mads, uses_h6_mads
+from openpilot.selfdrive.selfdrived.gwm_alert_sound import gwm_alert_sound
 
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware import HARDWARE
@@ -32,7 +33,6 @@ SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
 
 LONGITUDINAL_PERSONALITY_MAP = {v: k for k, v in log.LongitudinalPersonality.schema.enumerants.items()}
-STEER_SATURATED_SOUND_COOLDOWN = 30.  # s, GWM only (see alert_sound)
 
 ThermalStatus = log.DeviceState.ThermalStatus
 State = log.SelfdriveState.OpenpilotState
@@ -127,9 +127,6 @@ class SelfdriveD:
     self.mismatch_counter = 0
     self.cruise_mismatch_counter = 0
     self.last_steering_pressed_frame = 0
-    self.steer_saturated_alert_start = -1        # GWM: start_frame of the steerSaturated alert last seen
-    self.steer_saturated_sound_frame = -10**9    # GWM: start_frame of the last steerSaturated alert that sounded
-    self.steer_saturated_audible = True
     self.distance_traveled = 0
     self.last_functional_fan_frame = 0
     self.events_prev = []
@@ -274,14 +271,13 @@ class SelfdriveD:
         if user_gas:
           self.events.add(EventName.pedalPressed)
         lkas_tap = any(be.type == ButtonType.lkas and be.pressed for be in CS.buttonEvents)
-        want_enable, want_cancel, override_long = self.mads.update(
+        # off is stalk UP only (buttonCancel from the car events); MADS never cancels on its own
+        want_enable, override_long = self.mads.update(
           engaged=self.enabled,
           user_brake=user_brake,
           lkas_tap=lkas_tap,
           acc_enable=CS.buttonEnable,
         )
-        if want_cancel:
-          self.events.add(EventName.buttonCancel)
         if want_enable:
           self.events.add(EventName.buttonEnable)
         if override_long:
@@ -565,17 +561,9 @@ class SelfdriveD:
 
   def alert_sound(self):
     alert = self.AM.current_alert
-    if self.CP.brand != "gwm" or not alert.alert_type.startswith("steerSaturated/"):
+    if self.mads is None:  # H6 MK4 only
       return alert.audible_alert
-    # GWM MK4: sound "turn exceeds limit" at most once per STEER_SATURATED_SOUND_COOLDOWN; later alerts in
-    # that window stay visual-only (routes 107/109: bursts of back-to-back alerts on the same curve).
-    start = self.AM.alerts[alert.alert_type].start_frame
-    if start != self.steer_saturated_alert_start:
-      self.steer_saturated_alert_start = start
-      self.steer_saturated_audible = (start - self.steer_saturated_sound_frame) * DT_CTRL >= STEER_SATURATED_SOUND_COOLDOWN
-      if self.steer_saturated_audible:
-        self.steer_saturated_sound_frame = start
-    return alert.audible_alert if self.steer_saturated_audible else log.SelfdriveState.AudibleAlert.none
+    return gwm_alert_sound(alert.alert_type, alert.audible_alert)
 
   def publish_selfdriveState(self, CS):
     # selfdriveState

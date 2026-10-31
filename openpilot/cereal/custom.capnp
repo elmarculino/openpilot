@@ -50,7 +50,22 @@ struct MadsState @0xaedffd8f31e7b55d {
   }
 }
 
-struct CustomReserved2 @0xf35cc4560bbf6ec2 {
+# H6 MK4: why steering is not applied while engaged (selfdrive/car/gwm_lat_state.py), log only. Published
+# by card, which owns the carcontroller's driver-override latch and the EPS A_RX_STEER_REQUESTED status.
+struct GwmLatState @0xf35cc4560bbf6ec2 {
+  reason @0 :Reason;
+  frames @1 :UInt16;            # consecutive frames in this reason (saturates)
+  aRx @2 :UInt8;                # EPS A_RX_STEER_REQUESTED (1 = obeying the angle command)
+  driverTorque @3 :Float32;     # B_RX_DRIVER_TORQUE, what the override latch looks at
+  angleErrorDeg @4 :Float32;    # commanded - measured wheel angle: whether the wheel really stopped following
+
+  enum Reason {
+    none @0;                    # steering applied, or not engaged
+    driverOverride @1;          # driver torque latch handed the wheel back (|torque| > 130 sustained)
+    epsNotObeying @2;           # EPS not granting angle authority (A_RX != 1)
+    standstill @3;              # latActive off at a stop, expected
+    inactive @4;                # engaged but latActive off for another reason
+  }
 }
 
 struct CustomReserved3 @0xda96579883444c35 {

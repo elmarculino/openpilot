@@ -372,15 +372,6 @@ def personality_changed_alert(CP: car.CarParams, CS: car.CarState, sm: messaging
   return NormalPermanentAlert(f"Driving Personality: {personality}", duration=1.5)
 
 
-def steer_saturated_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
-  # GWM MK4: one prompt instead of promptRepeat; selfdrived also rate-limits the sound (routes 107/109).
-  sound = AudibleAlert.prompt if CP.brand == "gwm" else AudibleAlert.promptRepeat
-  text1, text2 = ("take control", "turn exceeds limit") if HARDWARE.get_device_type() == 'mici' else ("Take Control", "Turn Exceeds Steering Limit")
-  return Alert(text1, text2,
-               AlertStatus.userPrompt, AlertSize.mid,
-               Priority.LOW, VisualAlert.steerRequired, sound, 2.)
-
-
 def invalid_lkas_setting_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   text = "Toggle stock LKAS on or off to engage"
   if CP.brand == "tesla":
@@ -626,7 +617,11 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.steerSaturated: {
-    ET.WARNING: steer_saturated_alert,
+    ET.WARNING: Alert(
+      "Take Control",
+      "Turn Exceeds Steering Limit",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 2.),
   },
 
   # Thrown when the fan is driven at >50% but is not rotating
@@ -1065,7 +1060,11 @@ if HARDWARE.get_device_type() == 'mici':
         Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .1),
     },
     EventName.steerSaturated: {
-      ET.WARNING: steer_saturated_alert,
+      ET.WARNING: Alert(
+        "take control",
+        "turn exceeds limit",
+        AlertStatus.userPrompt, AlertSize.mid,
+        Priority.LOW, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 2.),
     },
     EventName.calibrationIncomplete: {
       ET.PERMANENT: calibration_incomplete_alert,

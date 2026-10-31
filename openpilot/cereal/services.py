@@ -98,6 +98,7 @@ _services: dict[str, tuple] = {
   # Same rate as their publisher's own message so the two stay frame-aligned in a route.
   "sccvState": (True, 20., 10),    # plannerd, alongside longitudinalPlan
   "madsState": (True, 100., 10),   # selfdrived, alongside selfdriveState
+  "gwmLatState": (True, 100., 10), # card, alongside carState (H6 MK4 only)
 }
 SERVICE_LIST = {name: Service(*vals) for
                 idx, (name, vals) in enumerate(_services.items())}
