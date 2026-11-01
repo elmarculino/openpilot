@@ -34,9 +34,8 @@ def test_stalk_engage_is_silent():
   assert _sound(_sd(), EventName.buttonEnable, ET.ENABLE) == AudibleAlert.none
 
 
-def test_stalk_up_still_chimes():
-  # gentle DOWN no longer turns steering off, so a real "off" has to sound different from it
-  assert _sound(_sd(), EventName.buttonCancel, ET.USER_DISABLE) == AudibleAlert.disengage
+def test_stalk_up_disengage_is_silent():
+  assert _sound(_sd(), EventName.buttonCancel, ET.USER_DISABLE) == AudibleAlert.none
 
 
 def test_turn_exceeds_limit_is_visual_only():
