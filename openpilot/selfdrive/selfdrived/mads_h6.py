@@ -1,8 +1,10 @@
 """H6 MK4 MADS-lite: ACC and LKAS are independent.
 
-Gentle DOWN toggles lateral only. Detent engages both. Brake/regen
-drops ACC and keeps LKAS. Stalk UP cancels both (handled as buttonCancel
-outside this helper).
+Driver rules (one gesture, one meaning, no hidden state):
+  stalk UP        -> off (both). Handled as buttonCancel outside this helper.
+  detent DOWN     -> steering + ACC (engages, or re-arms ACC when steering is already on).
+  gentle DOWN     -> steering only. Drops ACC if it was on. Never disengages.
+  brake / regen   -> drops ACC, keeps steering.
 """
 from opendbc.car.structs import car
 from openpilot.common.realtime import DT_CTRL
@@ -40,14 +42,12 @@ class H6Mads:
     self.mismatch_counter = 0
     self.mismatch = False
     self.override_source = OVERRIDE_NONE
-    self.brake_dropped_long = False
 
   def reset(self) -> None:
     self.long_enabled = False
     self.mismatch_counter = 0
     self.mismatch = False
     self.override_source = OVERRIDE_NONE
-    self.brake_dropped_long = False
 
   def data_sample(self, panda_states, engaged: bool) -> None:
     """Flag a MADS engagement the panda is not backing.
@@ -75,58 +75,38 @@ class H6Mads:
       self.mismatch = True
       cloudlog.error("mads_h6: engaged with no panda allowing controls, disengaging")
 
-  def update(self, *, engaged: bool, user_brake: bool, lkas_tap: bool, acc_enable: bool) -> tuple[bool, bool, bool]:
-    """Returns (want_enable, want_cancel, override_long)."""
-    want_enable = False
-    want_cancel = False
+  def update(self, *, engaged: bool, user_brake: bool, lkas_tap: bool, acc_enable: bool) -> tuple[bool, bool]:
+    """Returns (want_enable, override_long).
 
-    if not engaged:
-      # nothing to carry across a disengage
-      self.brake_dropped_long = False
+    Nothing here disengages: off is stalk UP only. The old gentle-DOWN toggle-off took 1, 2 or 3
+    presses depending on a hidden brake latch, so "DOWN to turn off" only worked some of the time.
+    """
+    want_enable = False
 
     if user_brake:
-      # Remember that the pedal, not the stalk, is what took ACC away. `user_brake` is level
-      # triggered while moving (selfdrived.py: true for the whole hold), and a gentle DOWN only
-      # fires `lkas_tap` on release (mk4_stalk.py), so by then `long_enabled` is already false.
-      # Without this latch that release reads as the lat-only toggle-off and steering drops --
-      # the opposite of "brake keeps LKAS" (PR #2 review, mads_h6.py:85).
-      self.brake_dropped_long = self.brake_dropped_long or self.long_enabled
       self.long_enabled = False
       self.override_source = OVERRIDE_BRAKE
 
     if lkas_tap:
-      if not engaged:
-        want_enable = True
-        self.long_enabled = False
-        self.override_source = OVERRIDE_LATERAL_ONLY
-      elif self.long_enabled:
-        self.long_enabled = False
-        self.override_source = OVERRIDE_LATERAL_ONLY
-      elif self.brake_dropped_long:
-        # The press started while ACC was live, so the gesture asks for exactly what the brake
-        # already did: drop ACC, keep steering. Consume the latch -- a second gentle, one that
-        # starts in lat-only, must still cancel (test_gentle_from_lat_only_cancels).
-        self.brake_dropped_long = False
-        # with the pedal still down the brake is the honest cause; once it is up, the gesture is
-        self.override_source = OVERRIDE_BRAKE if user_brake else OVERRIDE_LATERAL_ONLY
-      else:
-        want_cancel = True
+      # steering only, from any state: engages lat-only when off, drops ACC when both are on,
+      # and is a no-op when already lat-only
+      want_enable = not engaged
+      self.long_enabled = False
+      # with the pedal still down the brake is the honest cause; once it is up, the gesture is
+      self.override_source = OVERRIDE_BRAKE if user_brake else OVERRIDE_LATERAL_ONLY
 
     if acc_enable:
       want_enable = True
-      want_cancel = False
       # A brake in this same cycle still wins: engaging while braking is lat-only until release.
       # Without this, ENABLE arrives without OVERRIDE_LONGITUDINAL and state.py:86 lands on
       # State.enabled instead of State.overriding -- the FSM would believe long is live with a
       # foot on the pedal (the panda blocks the TX either way, but the two layers must agree).
       self.long_enabled = not user_brake
       self.override_source = OVERRIDE_BRAKE if user_brake else OVERRIDE_NONE
-      # the driver just spoke about ACC directly, so the earlier brake drop is spent either way
-      self.brake_dropped_long = False
 
-    override_long = (engaged or want_enable) and not self.long_enabled and not want_cancel
+    override_long = (engaged or want_enable) and not self.long_enabled
     # The source only means anything while overriding, so clear it rather than let a stale cause
     # sit in the log for the rest of the drive.
     if not override_long:
       self.override_source = OVERRIDE_NONE
-    return want_enable, want_cancel, override_long
+    return want_enable, override_long

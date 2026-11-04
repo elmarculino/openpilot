@@ -23,6 +23,7 @@ from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 from openpilot.selfdrive.selfdrived.mads_h6 import H6Mads, uses_h6_mads
+from openpilot.selfdrive.selfdrived.gwm_alert_sound import gwm_alert_sound
 
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware import HARDWARE
@@ -270,14 +271,13 @@ class SelfdriveD:
         if user_gas:
           self.events.add(EventName.pedalPressed)
         lkas_tap = any(be.type == ButtonType.lkas and be.pressed for be in CS.buttonEvents)
-        want_enable, want_cancel, override_long = self.mads.update(
+        # off is stalk UP only (buttonCancel from the car events); MADS never cancels on its own
+        want_enable, override_long = self.mads.update(
           engaged=self.enabled,
           user_brake=user_brake,
           lkas_tap=lkas_tap,
           acc_enable=CS.buttonEnable,
         )
-        if want_cancel:
-          self.events.add(EventName.buttonCancel)
         if want_enable:
           self.events.add(EventName.buttonEnable)
         if override_long:
@@ -559,6 +559,12 @@ class SelfdriveD:
     self.AM.add_many(self.sm.frame, alerts)
     self.AM.process_alerts(self.sm.frame, clear_event_types)
 
+  def alert_sound(self):
+    alert = self.AM.current_alert
+    if self.mads is None:  # H6 MK4 only
+      return alert.audible_alert
+    return gwm_alert_sound(alert.alert_type, alert.audible_alert)
+
   def publish_selfdriveState(self, CS):
     # selfdriveState
     ss_msg = messaging.new_message('selfdriveState')
@@ -576,7 +582,7 @@ class SelfdriveD:
     ss.alertSize = self.AM.current_alert.alert_size
     ss.alertStatus = self.AM.current_alert.alert_status
     ss.alertType = self.AM.current_alert.alert_type
-    ss.alertSound = self.AM.current_alert.audible_alert
+    ss.alertSound = self.alert_sound()
     ss.alertHudVisual = self.AM.current_alert.visual_alert
 
     self.pm.send('selfdriveState', ss_msg)

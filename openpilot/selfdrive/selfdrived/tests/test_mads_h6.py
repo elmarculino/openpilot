@@ -15,86 +15,131 @@ from openpilot.selfdrive.selfdrived.mads_h6 import (
 SafetyModel = car.CarParams.SafetyModel
 
 
+def _both(m):
+  """Engage steering + ACC with the detent."""
+  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert m.long_enabled
+
+
+def _lat_only(m):
+  """Engage steering only with a gentle DOWN."""
+  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert not m.long_enabled
+
+
 def test_gentle_from_off_is_lat_only():
   m = H6Mads()
-  want_enable, want_cancel, override = m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  want_enable, override = m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
   assert want_enable
-  assert not want_cancel
   assert not m.long_enabled
   assert override  # same frame as enable so longActive never pulses
-  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  want_enable, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
   assert not want_enable
-  assert not want_cancel
   assert override
 
 
-def test_gentle_from_lat_only_cancels():
+def test_gentle_from_lat_only_keeps_steering():
+  # rule 3: gentle DOWN never disengages; from lat-only it is a no-op
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
-  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  assert want_cancel
+  _lat_only(m)
+  want_enable, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
   assert not want_enable
-  assert not override
+  assert override
+  assert not m.long_enabled
 
 
 def test_gentle_from_both_drops_acc():
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  assert m.long_enabled
-  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  assert not want_cancel
+  _both(m)
+  want_enable, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert not want_enable
   assert not m.long_enabled
   assert override
 
 
+def test_repeated_gentle_never_turns_off():
+  # the old toggle took 1, 2 or 3 presses to turn off depending on a hidden brake latch
+  for brake_first in (False, True):
+    m = H6Mads()
+    _both(m)
+    if brake_first:
+      m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+      m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+    for _ in range(5):
+      want_enable, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+      assert not want_enable
+      assert override
+      assert not m.long_enabled
+
+
+def test_gentle_under_brake_keeps_steering():
+  for lkas_same_cycle in (True, False):
+    m = H6Mads()
+    _both(m)
+    if not lkas_same_cycle:
+      for _ in range(5):
+        m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+    _, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
+    assert override
+    assert not m.long_enabled
+    assert m.override_source == OVERRIDE_BRAKE
+
+
 def test_detent_engages_both():
   m = H6Mads()
-  want_enable, want_cancel, override = m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  want_enable, override = m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
   assert want_enable
-  assert not want_cancel
   assert m.long_enabled
   assert not override
-  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
   assert not override
 
 
 def test_detent_from_lat_only_adds_acc():
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
-  want_enable, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
+  _lat_only(m)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
   assert m.long_enabled
-  assert not want_cancel
+  assert not override
+
+
+def test_detent_after_brake_rearms_acc():
+  m = H6Mads()
+  _both(m)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
+  assert m.long_enabled
   assert not override
 
 
 def test_brake_drops_acc_keeps_lat():
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  want_enable, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  _both(m)
+  want_enable, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  assert not want_enable
   assert not m.long_enabled
-  assert not want_cancel
   assert override
 
 
 def test_brake_while_lat_only_stays_lat():
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
-  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
-  assert not want_cancel
+  _lat_only(m)
+  _, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
   assert override
 
 
 def test_reset_clears_acc():
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
+  _both(m)
   m.reset()
   assert not m.long_enabled
 
 
 def test_wheel_does_not_enable_acc_without_acc_enable():
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
-  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  _lat_only(m)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
   assert override
   assert not m.long_enabled
 
@@ -104,119 +149,17 @@ def test_same_cycle_brake_and_detent_is_lat_only():
   # ENABLE is raised together with the long override and state.py enters State.overriding
   # directly. Without this the FSM would spend a cycle in State.enabled believing long is live.
   m = H6Mads()
-  want_enable, want_cancel, override = m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  want_enable, override = m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
   assert want_enable
-  assert not want_cancel
   assert override
   assert not m.long_enabled
-
-
-def test_detent_without_brake_still_takes_long():
-  m = H6Mads()
-  want_enable, _, override = m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  assert want_enable
-  assert not override
-  assert m.long_enabled
-
-
-def test_brake_then_gentle_same_cycle_keeps_lat():
-  # ACC+lat, then the pedal and the stalk release land on the same frame. The brake already
-  # dropped ACC, so the gesture is asking for what it got -- it must not read as the lat-only
-  # toggle-off (PR #2 review, mads_h6.py:85).
-  m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
-  assert not want_cancel
-  assert override
-  assert not m.long_enabled
-  assert m.override_source == OVERRIDE_BRAKE
-
-
-def test_brake_then_gentle_next_frame_keeps_lat():
-  # the cross-frame shape: pull gentle DOWN from ACC+lat, brake during the hold, release the
-  # stalk while the pedal is still down. `user_brake` is level triggered, so long_enabled was
-  # cleared frames earlier.
-  m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  for _ in range(5):
-    m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
-  assert not m.long_enabled
-  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
-  assert not want_cancel
-  assert override
-
-
-def test_gentle_after_brake_released_keeps_lat():
-  # same gesture, pedal up before the stalk release: the cause logged is then the driver's own
-  m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
-  m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
-  _, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  assert not want_cancel
-  assert override
-  assert m.override_source == OVERRIDE_LATERAL_ONLY
-
-
-def test_second_gentle_after_a_brake_drop_cancels():
-  # the latch is spent by the first gesture: from there the car really is in lat-only and a
-  # gentle DOWN means off
-  m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
-  m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  _, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  assert want_cancel
-  assert not override
-
-
-def test_brake_while_lat_only_then_gentle_still_cancels():
-  # no ACC was ever live, so the brake latches nothing and the gesture keeps its plain meaning
-  m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
-  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
-  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
-  assert want_cancel
-  assert not override
-
-
-def test_detent_under_brake_then_gentle_cancels():
-  # engaging under the pedal is a deliberate lat-only, not a brake-dropped ACC: the next gentle
-  # is the toggle-off
-  m = H6Mads()
-  m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
-  _, want_cancel, override = m.update(engaged=True, user_brake=True, lkas_tap=True, acc_enable=False)
-  assert want_cancel
-  assert not override
-
-
-def test_re_engaging_acc_spends_the_brake_latch():
-  m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
-  m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
-  assert m.long_enabled
-  # gentle drops ACC again (long branch), and the one after that cancels
-  _, want_cancel, _ = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  assert not want_cancel
-  _, want_cancel, _ = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  assert want_cancel
-
-
-def test_disengage_clears_the_brake_latch():
-  m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
-  assert m.brake_dropped_long
-  m.reset()
-  assert not m.brake_dropped_long
 
 
 def test_brake_release_after_engaging_under_brake_does_not_resume_long():
   # long stays off until the driver asks for it again -- release alone must not silently resume ACC
   m = H6Mads()
   m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
-  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
   assert override
   assert not m.long_enabled
 
@@ -321,7 +264,7 @@ def test_brake_override_is_not_reported_as_gas():
   m = H6Mads()
   m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
   assert m.override_source == OVERRIDE_NONE  # long is live, nothing overridden
-  _, _, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  _, override = m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
   assert override
   assert m.override_source == OVERRIDE_BRAKE
 
@@ -329,14 +272,14 @@ def test_brake_override_is_not_reported_as_gas():
 def test_engaging_under_brake_reports_brake():
   # the same-cycle case: detent and brake together is lat-only, and the brake is the reason
   m = H6Mads()
-  _, _, override = m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
+  _, override = m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
   assert override
   assert m.override_source == OVERRIDE_BRAKE
 
 
 def test_gentle_gesture_reports_lateral_only():
   m = H6Mads()
-  _, _, override = m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
+  _, override = m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
   assert override
   assert m.override_source == OVERRIDE_LATERAL_ONLY
 
@@ -344,7 +287,7 @@ def test_gentle_gesture_reports_lateral_only():
 def test_dropping_acc_from_both_reports_lateral_only():
   m = H6Mads()
   m.update(engaged=False, user_brake=False, lkas_tap=False, acc_enable=True)
-  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
   assert override
   assert m.override_source == OVERRIDE_LATERAL_ONLY
 
@@ -354,17 +297,17 @@ def test_override_source_clears_when_long_comes_back():
   m = H6Mads()
   m.update(engaged=False, user_brake=True, lkas_tap=False, acc_enable=True)
   assert m.override_source == OVERRIDE_BRAKE
-  _, _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True)
   assert not override
   assert m.override_source == OVERRIDE_NONE
 
 
-def test_override_source_clears_on_cancel():
+def test_override_source_survives_gentle_from_lat_only():
   m = H6Mads()
-  m.update(engaged=False, user_brake=False, lkas_tap=True, acc_enable=False)
-  _, want_cancel, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
-  assert want_cancel and not override
-  assert m.override_source == OVERRIDE_NONE
+  _lat_only(m)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert override
+  assert m.override_source == OVERRIDE_LATERAL_ONLY
 
 
 def test_reset_clears_override_source():
@@ -393,3 +336,15 @@ def test_mads_state_round_trips_through_a_log():
     assert not ms.longEnabled
     assert str(ms.overrideSource) == "brake"
     assert ms.mismatchFrames == MISMATCH_FRAMES
+
+
+def test_gentle_after_brake_released_reports_the_gesture():
+  # lat-only after a brake, pedal up, then gentle DOWN: the brake is no longer the cause
+  m = H6Mads()
+  _both(m)
+  m.update(engaged=True, user_brake=True, lkas_tap=False, acc_enable=False)
+  assert m.override_source == OVERRIDE_BRAKE
+  m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
+  assert override
+  assert m.override_source == OVERRIDE_LATERAL_ONLY

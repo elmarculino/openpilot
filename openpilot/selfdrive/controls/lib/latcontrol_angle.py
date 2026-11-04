@@ -5,6 +5,10 @@ from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 
 # TODO This is speed dependent
 STEER_ANGLE_SATURATION_THRESHOLD = 2.5  # Degrees
+# GWM MK4: the fixed 2.5 deg is ~0.3 m/s^2 of lateral accel at 30-60 kph, where the EPS routinely trails
+# by that much for ~1 s (routes 107/109: 37% of active time). Require the angle error to also be worth
+# this much lateral accel, so low-speed tracking lag doesn't read as "turn exceeds limit".
+GWM_SATURATION_LAT_ACCEL = 0.6  # m/s^2
 
 
 class LatControlAngle(LatControl):
@@ -12,6 +16,7 @@ class LatControlAngle(LatControl):
     super().__init__(CP, CI, dt)
     self.sat_check_min_speed = 5.
     self.use_steer_limited_by_safety = CP.brand in ("tesla", "hyundai")
+    self.saturation_lat_accel = GWM_SATURATION_LAT_ACCEL if CP.brand == "gwm" else 0.
 
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay):
     angle_log = log.ControlsState.LateralAngleState.new_message()
@@ -30,8 +35,15 @@ class LatControlAngle(LatControl):
     else:
       # for cars which use a method of limiting torque such as a torque signal (Nissan and Toyota)
       # or relying on EPS (Ford Q3), carOutput does not capture maxing out torque  # TODO: this can be improved
-      angle_control_saturated = abs(angle_steers_des - CS.steeringAngleDeg) > STEER_ANGLE_SATURATION_THRESHOLD
+      angle_control_saturated = abs(angle_steers_des - CS.steeringAngleDeg) > self.saturation_threshold(CS.vEgo, VM)
     angle_log.saturated = bool(self._check_saturation(angle_control_saturated, CS, False, curvature_limited))
     angle_log.steeringAngleDeg = float(CS.steeringAngleDeg)
     angle_log.steeringAngleDesiredDeg = angle_steers_des
     return 0, float(angle_steers_des), angle_log
+
+  def saturation_threshold(self, v_ego, VM):
+    if self.saturation_lat_accel <= 0.:
+      return STEER_ANGLE_SATURATION_THRESHOLD
+    v = max(v_ego, 1.)
+    lat_accel_angle = math.degrees(VM.get_steer_from_curvature(self.saturation_lat_accel / v**2, v, 0.))
+    return max(STEER_ANGLE_SATURATION_THRESHOLD, lat_accel_angle)
