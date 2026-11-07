@@ -10,8 +10,9 @@ from openpilot.selfdrive.controls.lib.vision_turn_speed import (
   _ENTERING_PRED_LAT_ACC_TH,
   _TURNING_LAT_ACC_TH,
   _A_LAT_REG_MAX,
-  _IN_CURVE_LAT_ACC,
-  _IN_CURVE_MIN_ACC,
+  _IN_CURVE_MIN_ACC_V,
+  _TURNING_ACC_V,
+  _A_TARGET_MAX_STEP,
 )
 
 LongitudinalPlanSource = log.LongitudinalPlan.LongitudinalPlanSource
@@ -228,34 +229,82 @@ def test_output_v_target_never_lands_under_the_entry_gate():
   assert scc.get_v_target_from_control() == MIN_V
 
 
-def _enter_on_straight(scc, v_ego, pred):
-  sm = _sm(pred)
-  for _ in range(2):
+V_HWY = 25.0
+
+
+def _step(scc, pred, lat=0.0, n=1, v_ego=V_HWY):
+  sm = _sm(pred, curvature=lat / v_ego ** 2)
+  for _ in range(n):
     scc.update(sm, True, False, v_ego, 0.0, V_CRUISE_MS)
-  assert scc.state == VisionState.entering
 
 
-def test_speed_cap_only_before_the_curve():
+def test_speed_cap_before_the_curve_not_in_it():
   # route 1c5: the cap stayed on inside the curve and held the cruise accel at -1.2 m/s^2
-  v_ego = 25.0
   scc = SmartCruiseControlVision(enabled=True)
-  _enter_on_straight(scc, v_ego, 3.0)
-  assert scc.output_v_target < v_ego  # before the curve: slow down
-  # in the curve, still `entering` (lat acc under the turning threshold) -- no cap any more
-  scc.update(_sm(3.0, curvature=_IN_CURVE_LAT_ACC / v_ego ** 2 + 1e-4), True, False, v_ego, 0.0, V_CRUISE_MS)
+  _step(scc, 2.0, n=2)
+  assert scc.state == VisionState.entering
+  assert scc.output_v_target < V_HWY  # straight, curve ahead: slow down
+  _step(scc, 1.8, lat=0.7)  # in the curve, nothing sharper ahead (1.8 < 0.7 + margin)
   assert scc.state == VisionState.entering
   assert scc.output_v_target == V_TARGET_UNSET
-  _drive_into_turn(scc, v_ego)
+  _step(scc, 1.8, lat=2.0, n=3)
+  assert scc.state == VisionState.turning
   assert scc.output_v_target == V_TARGET_UNSET
 
 
-def test_entering_decel_is_gentle_once_in_the_curve():
-  v_ego = 25.0
+def test_in_curve_decel_is_gentle():
   scc = SmartCruiseControlVision(enabled=True)
-  _enter_on_straight(scc, v_ego, 3.0)
-  assert scc.output_a_target < _IN_CURVE_MIN_ACC  # full decel before the curve
-  scc.update(_sm(3.0, curvature=_IN_CURVE_LAT_ACC / v_ego ** 2 + 1e-4), True, False, v_ego, 0.0, V_CRUISE_MS)
-  assert scc.output_a_target == _IN_CURVE_MIN_ACC
+  _step(scc, 1.8, lat=0.7, n=100)
+  assert scc.state == VisionState.entering and scc.in_curve and not scc.sharper_ahead
+  assert scc.output_a_target == _IN_CURVE_MIN_ACC_V[0]
+
+
+def test_sharper_curve_ahead_keeps_the_approach_response():
+  # review: a shallow bend before a tightening curve must not lose the pre-curve braking
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.0, lat=0.61, n=100)
+  assert scc.in_curve and scc.sharper_ahead
+  assert scc.output_a_target == -1.0
+  assert scc.output_v_target < V_HWY
+
+
+def test_turning_never_accelerates_toward_a_sharper_curve():
+  # review: crossing into `turning` at 1.6 with 3.0 predicted used to turn -0.4 into +0.44
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.0, lat=1.7, n=100)
+  assert scc.state == VisionState.turning
+  assert scc.output_a_target == -1.0
+  assert scc.output_v_target < V_HWY
+  _step(scc, 3.0, lat=1.2, n=100)  # leaving, sharper bend next
+  assert scc.state == VisionState.leaving
+  assert scc.output_a_target == -1.0
+
+
+def test_high_lat_acc_backstop():
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.5, lat=3.5, n=100)
+  assert scc.state == VisionState.turning and not scc.sharper_ahead
+  assert scc.output_a_target == _TURNING_ACC_V[-1]
+
+
+def test_in_curve_has_hysteresis():
+  # review: a lat acc estimate dithering at 0.6 must not flip the decel between floor and approach
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 1.8, lat=0.7, n=5)
+  for k in range(20):
+    _step(scc, 1.8, lat=0.59 if k % 2 else 0.61)
+    assert scc.in_curve
+
+
+def test_candidate_is_rate_limited():
+  scc = SmartCruiseControlVision(enabled=True)
+  prev = None
+  for k in range(200):
+    lat = [0.0, 0.61, 1.7, 0.3][(k // 50) % 4]
+    _step(scc, 3.0 if k % 7 else 1.6, lat=lat)
+    if scc.is_active and prev is not None:
+      assert abs(scc.output_a_target - prev) <= _A_TARGET_MAX_STEP + 1e-9
+    prev = scc.output_a_target if scc.is_active else None
 
 
 def test_gentle_bend_does_not_trigger():
