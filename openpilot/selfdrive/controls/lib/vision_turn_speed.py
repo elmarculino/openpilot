@@ -52,10 +52,9 @@ _IN_CURVE_OFF_LAT_ACC = 0.4
 # its full value at 1.2.
 _NO_ACCEL_AHEAD_BP = [0.3, 0.6]
 _APPROACH_AHEAD_BP = [0.6, 1.2]
-# In-curve floor: -0.4 up to 3.0 m/s^2 (sunnypilot's turning floor), then a backstop down to -1.0
-# by 3.5 m/s^2 -- past that the curve is taken too fast to stay gentle. Reachable from `enabled`.
-_IN_CURVE_MIN_ACC_BP = [3.0, 3.5]
-_IN_CURVE_MIN_ACC_V = [-0.4, -1.0]
+# Past 3.0 m/s^2 measured the curve is taken too fast to stay gentle: the turning table brakes down
+# to -1.0 by 3.5 (backstop), and `enabled` goes straight to `turning` so it always applies.
+_BACKSTOP_LAT_ACC = 3.0
 # SCC-V's candidate bypasses the cruise jerk limit, so it carries its own: braking builds at up to
 # 2 m/s^3 and releases at 1 m/s^3. When SCC-V stops being active the candidate is not dropped but
 # released at that rate up to the planner's ACCEL_MAX (where it can no longer bind), so the planner
@@ -200,7 +199,7 @@ class SmartCruiseControlVision:
           elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH or self.sharper_ahead >= _APPROACH_AHEAD_BP[0]:
             # the second term: in a curve, a tighter bend the model's slowdown keeps under the threshold
             self.state = VisionState.entering
-          elif self.current_lat_acc >= _IN_CURVE_MIN_ACC_BP[0]:
+          elif self.current_lat_acc >= _BACKSTOP_LAT_ACC:
             # already deep in a sharp curve the model no longer predicts: the backstop still applies
             self.state = VisionState.turning
         elif self.state == VisionState.overriding:
@@ -240,12 +239,13 @@ class SmartCruiseControlVision:
       return approach
     # in a curve, size the response to the bend ahead at today's speed (see sharper_ahead)
     approach = float(np.interp(self.pred_lat_acc_at_v_ego, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
-    if self.state == VisionState.turning:
+    if self.state in (VisionState.turning, VisionState.entering):
+      # `entering` while already in a gentle curve gets the in-curve policy too: no standing decel for
+      # a bend that is not getting sharper (Fable/Sol votes: -0.2..-0.3 held through long sweepers,
+      # then released to +0.5 -- a slow brake/accelerate cycle)
       own = float(np.interp(self.current_lat_acc, _TURNING_ACC_BP, _TURNING_ACC_V))
     elif self.state == VisionState.leaving:
       own = _LEAVING_ACC
-    elif self.state == VisionState.entering:  # already in a gentle curve
-      own = max(approach, float(np.interp(self.current_lat_acc, _IN_CURVE_MIN_ACC_BP, _IN_CURVE_MIN_ACC_V)))
     else:
       raise NotImplementedError(f"SCC-V state not supported: {self.state}")
     ahead = self.sharper_ahead

@@ -13,7 +13,6 @@ from openpilot.selfdrive.controls.lib.vision_turn_speed import (
   _ENTERING_PRED_LAT_ACC_TH,
   _TURNING_LAT_ACC_TH,
   _A_LAT_REG_MAX,
-  _IN_CURVE_MIN_ACC_V,
   _TURNING_ACC_V,
   _A_TARGET_STEP_DOWN,
   _A_TARGET_STEP_UP,
@@ -259,11 +258,23 @@ def test_speed_cap_before_the_curve_not_in_it():
   assert scc.output_v_target == V_TARGET_UNSET
 
 
-def test_in_curve_decel_is_gentle():
+def test_gentle_curve_has_no_standing_decel():
+  # Fable/Sol votes: `entering` inside a long sweeper held -0.2..-0.3 with nothing sharper ahead
   scc = SmartCruiseControlVision(enabled=True)
-  _step(scc, 1.6, lat=1.0, n=100)
+  _step(scc, 1.6, lat=1.4, n=100)
   assert scc.state == VisionState.entering and scc.in_curve
-  assert _IN_CURVE_MIN_ACC_V[0] <= scc.output_a_target < 0.
+  assert scc.output_a_target >= 0.
+
+
+def test_constant_radius_with_predicted_speed_up_does_not_brake():
+  # Sol vote: v_ego 30, lat 1.2, model plan at 35 m/s -> model lat acc 1.63 enters SCC-V
+  v_ego = 30.0
+  k = 1.2 / v_ego ** 2
+  scc = SmartCruiseControlVision(enabled=True)
+  for _ in range(100):
+    scc.update(_sm_curve(k, k, 35.0), True, False, v_ego, 0.0, V_CRUISE_MS)
+  assert scc.state == VisionState.entering
+  assert scc.output_a_target >= 0.
 
 
 def test_sharper_curve_ahead_keeps_the_approach_response():
