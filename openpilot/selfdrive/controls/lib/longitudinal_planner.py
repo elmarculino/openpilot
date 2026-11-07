@@ -151,7 +151,7 @@ class LongitudinalPlanner:
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if sm['selfdriveState'].experimentalMode:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
-    if self.scc_v.is_active:
+    if self.scc_v.has_candidate:
       # Its own source, not `cruise`: otherwise a route cannot tell curve braking from cruise
       # braking and the SCC-V thresholds are untunable from logs.
       candidates.append((self.scc_v.output_a_target, LongitudinalPlanSource.turnSpeed, False))

@@ -1,4 +1,6 @@
 import math
+
+import numpy as np
 from types import SimpleNamespace
 
 from openpilot.cereal import custom, log
@@ -12,7 +14,8 @@ from openpilot.selfdrive.controls.lib.vision_turn_speed import (
   _A_LAT_REG_MAX,
   _IN_CURVE_MIN_ACC_V,
   _TURNING_ACC_V,
-  _A_TARGET_MAX_STEP,
+  _A_TARGET_STEP_DOWN,
+  _A_TARGET_STEP_UP,
 )
 
 LongitudinalPlanSource = log.LongitudinalPlan.LongitudinalPlanSource
@@ -232,10 +235,10 @@ def test_output_v_target_never_lands_under_the_entry_gate():
 V_HWY = 25.0
 
 
-def _step(scc, pred, lat=0.0, n=1, v_ego=V_HWY):
+def _step(scc, pred, lat=0.0, n=1, v_ego=V_HWY, a_ego=0.0):
   sm = _sm(pred, curvature=lat / v_ego ** 2)
   for _ in range(n):
-    scc.update(sm, True, False, v_ego, 0.0, V_CRUISE_MS)
+    scc.update(sm, True, False, v_ego, a_ego, V_CRUISE_MS)
 
 
 def test_speed_cap_before_the_curve_not_in_it():
@@ -244,51 +247,115 @@ def test_speed_cap_before_the_curve_not_in_it():
   _step(scc, 2.0, n=2)
   assert scc.state == VisionState.entering
   assert scc.output_v_target < V_HWY  # straight, curve ahead: slow down
-  _step(scc, 1.8, lat=0.7)  # in the curve, nothing sharper ahead (1.8 < 0.7 + margin)
+  _step(scc, 2.0, lat=0.7)
   assert scc.state == VisionState.entering
   assert scc.output_v_target == V_TARGET_UNSET
-  _step(scc, 1.8, lat=2.0, n=3)
+  _step(scc, 2.0, lat=2.0, n=3)
   assert scc.state == VisionState.turning
   assert scc.output_v_target == V_TARGET_UNSET
 
 
 def test_in_curve_decel_is_gentle():
   scc = SmartCruiseControlVision(enabled=True)
-  _step(scc, 1.8, lat=0.7, n=100)
-  assert scc.state == VisionState.entering and scc.in_curve and not scc.sharper_ahead
-  assert scc.output_a_target == _IN_CURVE_MIN_ACC_V[0]
+  _step(scc, 1.6, lat=1.0, n=100)
+  assert scc.state == VisionState.entering and scc.in_curve
+  assert _IN_CURVE_MIN_ACC_V[0] <= scc.output_a_target < 0.
 
 
 def test_sharper_curve_ahead_keeps_the_approach_response():
-  # review: a shallow bend before a tightening curve must not lose the pre-curve braking
+  # review round 1: a shallow bend before a tightening curve must not lose the pre-curve braking
   scc = SmartCruiseControlVision(enabled=True)
   _step(scc, 3.0, lat=0.61, n=100)
-  assert scc.in_curve and scc.sharper_ahead
+  assert scc.in_curve
   assert scc.output_a_target == -1.0
-  assert scc.output_v_target < V_HWY
+
+
+def test_tighter_curve_under_a_fixed_margin_still_brakes():
+  # review round 2: lat 2.2 with 3.39 predicted (curve speed ~19 m/s at 25) settled at +0.06
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.39, lat=2.2, n=100)
+  assert scc.state == VisionState.turning
+  assert scc.output_a_target < -0.9
 
 
 def test_turning_never_accelerates_toward_a_sharper_curve():
-  # review: crossing into `turning` at 1.6 with 3.0 predicted used to turn -0.4 into +0.44
   scc = SmartCruiseControlVision(enabled=True)
-  _step(scc, 3.0, lat=1.7, n=100)
-  assert scc.state == VisionState.turning
-  assert scc.output_a_target == -1.0
-  assert scc.output_v_target < V_HWY
+  for pred in (2.3, 2.4, 2.6, 2.9, 3.2):  # lat 1.7: from 0.6 m/s^2 sharper ahead on
+    _step(scc, pred, lat=1.7, n=100)
+    assert scc.state == VisionState.turning
+    assert scc.output_a_target <= 1e-9
   _step(scc, 3.0, lat=1.2, n=100)  # leaving, sharper bend next
   assert scc.state == VisionState.leaving
   assert scc.output_a_target == -1.0
 
 
+def test_response_is_continuous_in_the_prediction():
+  # review round 2: a prediction dithering around one value must not flip braking on and off
+  for lat in (0.7, 1.7, 2.5):
+    prev = None
+    for pred in np.arange(lat, lat + 2.0, 0.01):
+      scc = SmartCruiseControlVision(enabled=True)
+      _step(scc, max(pred, 1.6), lat=lat, n=200)
+      if prev is not None:
+        assert abs(scc.output_a_target - prev) < 0.06
+      prev = scc.output_a_target
+
+
+def test_reacts_without_waiting_for_the_slew_up():
+  # review round 2: from +0.375 in `turning`, a sharper curve appearing must not keep a positive request
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 2.0, lat=1.7, n=100)
+  start = scc.output_a_target
+  _step(scc, 3.0, lat=1.7)
+  assert scc.output_a_target == start - _A_TARGET_STEP_DOWN
+  _step(scc, 3.0, lat=1.7, n=int(start / _A_TARGET_STEP_DOWN) + 1)
+  assert scc.output_a_target <= 0.
+
+
 def test_high_lat_acc_backstop():
   scc = SmartCruiseControlVision(enabled=True)
   _step(scc, 3.5, lat=3.5, n=100)
-  assert scc.state == VisionState.turning and not scc.sharper_ahead
+  assert scc.state == VisionState.turning
   assert scc.output_a_target == _TURNING_ACC_V[-1]
 
 
+def test_backstop_reachable_with_a_low_prediction():
+  # review round 2: deep in a sharp bend while the model already predicts its end
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 1.4, lat=3.5, n=100)
+  assert scc.state == VisionState.turning
+  assert scc.output_a_target == _TURNING_ACC_V[-1]
+
+
+def test_leaving_into_the_next_curve_approaches_it():
+  # review round 2: leaving -> enabled -> entering dropped the candidate for a frame
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.0, lat=1.2, n=5)
+  _step(scc, 3.0, lat=1.7, n=5)
+  _step(scc, 3.0, lat=1.2, n=5)
+  assert scc.state == VisionState.leaving
+  _step(scc, 3.0, lat=0.3)
+  assert scc.state == VisionState.entering
+  assert scc.has_candidate
+
+
+def test_candidate_is_released_not_dropped():
+  # review round 2: a settled -1.0 must not vanish when SCC-V goes inactive (here: model dropout)
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.5, lat=3.5, n=100)
+  assert scc.output_a_target == -1.0
+  prev = scc.output_a_target
+  for _ in range(100):
+    scc.update({}, True, False, V_HWY, 0.0, V_CRUISE_MS)
+    if not scc.has_candidate:
+      break
+    assert 0. <= scc.output_a_target - prev <= _A_TARGET_STEP_UP + 1e-9
+    prev = scc.output_a_target
+  assert not scc.has_candidate
+  assert prev >= 0.5 - _A_TARGET_STEP_UP
+
+
 def test_in_curve_has_hysteresis():
-  # review: a lat acc estimate dithering at 0.6 must not flip the decel between floor and approach
   scc = SmartCruiseControlVision(enabled=True)
   _step(scc, 1.8, lat=0.7, n=5)
   for k in range(20):
@@ -299,12 +366,12 @@ def test_in_curve_has_hysteresis():
 def test_candidate_is_rate_limited():
   scc = SmartCruiseControlVision(enabled=True)
   prev = None
-  for k in range(200):
-    lat = [0.0, 0.61, 1.7, 0.3][(k // 50) % 4]
-    _step(scc, 3.0 if k % 7 else 1.6, lat=lat)
-    if scc.is_active and prev is not None:
-      assert abs(scc.output_a_target - prev) <= _A_TARGET_MAX_STEP + 1e-9
-    prev = scc.output_a_target if scc.is_active else None
+  for k in range(400):
+    lat = [0.0, 0.61, 1.7, 0.3, 3.5][(k // 40) % 5]
+    _step(scc, 3.0 if k % 7 else 1.0, lat=lat, a_ego=1.5 if k % 3 else -1.5)
+    if scc.has_candidate and prev is not None:
+      assert -_A_TARGET_STEP_DOWN - 1e-9 <= scc.output_a_target - prev <= _A_TARGET_STEP_UP + 1e-9
+    prev = scc.output_a_target if scc.has_candidate else None
 
 
 def test_gentle_bend_does_not_trigger():
