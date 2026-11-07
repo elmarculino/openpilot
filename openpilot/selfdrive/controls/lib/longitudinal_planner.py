@@ -90,7 +90,7 @@ class LongitudinalPlanner:
     # deleted) for parity with sunnypilot and because the sccvState enum mirrors it; a gas-held
     # override already shows up as longActive=False.
     self.scc_v.update(sm, long_active, sm['carControl'].cruiseControl.override,
-                      v_ego, sm['carState'].aEgo, v_cruise)
+                      v_ego, sm['carState'].aEgo, v_cruise, a_plan_prev=self.output_a_target)
     if self.scc_v.is_active:
       v_cruise = min(v_cruise, self.scc_v.output_v_target)
 

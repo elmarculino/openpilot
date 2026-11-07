@@ -386,7 +386,8 @@ def test_candidate_is_rate_limited():
     a_ego = 1.5 if k % 3 else -1.5
     was_releasing = scc.releasing
     _step(scc, 3.0 if k % 7 else 1.0, lat=lat, a_ego=a_ego)
-    if scc.has_candidate and prev is not None:
+    straight = scc.state == VisionState.entering and not scc.in_curve  # unslewed by design (S1)
+    if scc.has_candidate and prev is not None and not straight:
       if was_releasing and scc.is_active:
         # mid-release restart: may drop to the car's accel (the released target was not binding)
         assert scc.output_a_target >= min(prev, a_ego) - _A_TARGET_STEP_DOWN - 1e-9
@@ -395,14 +396,14 @@ def test_candidate_is_rate_limited():
     prev = scc.output_a_target if scc.has_candidate else None
 
 
-def test_gentle_bend_does_not_trigger():
-  # route 1c5: predictions hovering at 1.1-1.3 flipped SCC-V on and off every 2-3 s
+def test_gentle_bend_flicker_never_brakes():
+  # route 1c5: in a long gentle bend the prediction hovered at 1.1-1.4 and SCC-V flipped on and off,
+  # alternating -0.2 and +0.4; inside a curve with nothing sharper ahead it must not brake at all
   scc = SmartCruiseControlVision(enabled=True)
-  sm = _sm(1.4)
-  for _ in range(10):
-    scc.update(sm, True, False, 25.0, 0.0, V_CRUISE_MS)
-  assert scc.state == VisionState.enabled
-
+  for k in range(200):
+    _step(scc, 1.4 if (k // 20) % 2 else 1.2, lat=1.0)
+    if scc.has_candidate:
+      assert scc.output_a_target >= 0.
 
 def test_sharper_bend_hidden_by_a_predicted_slowdown():
   # review round 3: lat 2.2 at 25 m/s, bend ahead 50% tighter (3.3 at today's speed) but reached at
@@ -441,12 +442,37 @@ def test_activation_does_not_prolong_harder_braking():
   assert scc.output_a_target > -0.4
 
 
-def test_activation_ramps_down_from_the_car_accel():
+def test_straight_approach_brakes_at_once_while_accelerating():
+  # sol-loop S1: the straight approach is the driver-approved path and must not be slewed
   scc = SmartCruiseControlVision(enabled=True)
-  _step(scc, 3.0, n=1, a_ego=0.5)
-  _step(scc, 3.0, n=1, a_ego=0.5)
+  _step(scc, 3.0, n=2, a_ego=0.5)
+  assert scc.state == VisionState.entering and not scc.in_curve
+  assert scc.output_a_target == -1.0
+  assert scc.output_v_target < V_HWY - 4 * 0.9  # the cap keeps its full no-overshoot term
+
+
+def test_straight_entry_threshold_unchanged():
+  # sol-loop S2: a 1.4 prediction on a straight still activates, as in sunnypilot
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 1.4, n=2)
   assert scc.state == VisionState.entering
-  assert scc.output_a_target == 0.5 - _A_TARGET_STEP_DOWN
+  assert scc.output_a_target < -0.2
+
+
+def test_mid_release_restart_keeps_a_binding_target():
+  # sol-loop S3: released target -0.4 was what the planner did; the car lags at -0.8
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.5, lat=3.5, n=100)
+  while scc.output_a_target < -0.4 - 1e-9:
+    scc.update({}, True, False, V_HWY, -0.8, V_CRUISE_MS)
+  assert scc.releasing
+  released = scc.output_a_target
+  sm = {"modelV2": SimpleNamespace(orientationRate=SimpleNamespace(z=[3.0 / V_HWY] * 33),
+                                   velocity=SimpleNamespace(x=[V_HWY] * 33)),
+        "controlsState": SimpleNamespace(curvature=0.7 / V_HWY ** 2)}
+  scc.update(sm, True, False, V_HWY, -0.8, V_CRUISE_MS, a_plan_prev=released)
+  assert scc.is_active and scc.in_curve
+  assert math.isclose(scc.output_a_target, released - _A_TARGET_STEP_DOWN)
 
 
 def test_in_curve_latch_tracks_while_long_is_off():

@@ -31,9 +31,7 @@ class VisionState(IntEnum):
 ACTIVE_STATES = (VisionState.entering, VisionState.turning, VisionState.leaving)
 ENABLED_STATES = (VisionState.enabled, VisionState.overriding, *ACTIVE_STATES)
 
-# 1.5, not sunnypilot's 1.3: on long gentle bends (route 1c5) the prediction hovered at 1.1-1.3
-# and SCC-V flipped enabled<->entering every 2-3 s, alternating -0.2 and +0.4 m/s^2.
-_ENTERING_PRED_LAT_ACC_TH = 1.5
+_ENTERING_PRED_LAT_ACC_TH = 1.3
 _ABORT_ENTERING_PRED_LAT_ACC_TH = 1.1
 _TURNING_LAT_ACC_TH = 1.6
 _LEAVING_LAT_ACC_TH = 1.3
@@ -255,7 +253,9 @@ class SmartCruiseControlVision:
     return min(own, own + w * (approach - own))
 
   def update(self, sm, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float,
-             v_cruise_setpoint: float) -> None:
+             v_cruise_setpoint: float, a_plan_prev: float | None = None) -> None:
+    """a_plan_prev: the planner's last output accel, so a mid-release restart never jumps away from a
+    target that was actually binding (defaults to a_ego)."""
     self.long_enabled = long_enabled
     self.long_override = long_override
     self.v_ego = v_ego
@@ -268,15 +268,21 @@ class SmartCruiseControlVision:
     self.is_enabled, self.is_active = self._update_state_machine()
     if self.is_active:
       solution = self._update_solution()
-      # ramp from the live candidate; a new one starts from the car's accel, but not below its own
-      # solution -- a car already braking harder (lead) must not have SCC-V prolong it (review round 3)
-      start = max(self.a_ego, solution)
-      if self.releasing:
-        # re-activated mid-release: the released target may sit far above what the car does (round 4)
-        prev = min(self.a_target, start)
+      if self.state == VisionState.entering and not self.in_curve:
+        # straight approach: unchanged from sunnypilot (the driver-approved pre-curve braking)
+        self.a_target = solution
       else:
-        prev = self.a_target if self.has_candidate else start
-      self.a_target = float(np.clip(solution, prev - _A_TARGET_STEP_DOWN, prev + _A_TARGET_STEP_UP))
+        # in a curve: ramp from the live candidate; a new one starts from the car's accel, but not
+        # below its own solution -- a car already braking harder (lead) must not have SCC-V prolong it
+        start = max(self.a_ego, solution)
+        if self.releasing:
+          # re-activated mid-release: restart from what the planner actually did, which is the
+          # released target itself when that was binding, and far below it when it was not
+          planned = self.a_ego if a_plan_prev is None else a_plan_prev
+          prev = min(self.a_target, max(planned, solution))
+        else:
+          prev = self.a_target if self.has_candidate else start
+        self.a_target = float(np.clip(solution, prev - _A_TARGET_STEP_DOWN, prev + _A_TARGET_STEP_UP))
       self.has_candidate = True
       self.releasing = False
     elif self.has_candidate and self.state == VisionState.enabled and self.a_target < ACCEL_MAX:
