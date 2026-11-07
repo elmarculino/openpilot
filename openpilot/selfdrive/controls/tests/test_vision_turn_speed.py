@@ -10,6 +10,8 @@ from openpilot.selfdrive.controls.lib.vision_turn_speed import (
   _ENTERING_PRED_LAT_ACC_TH,
   _TURNING_LAT_ACC_TH,
   _A_LAT_REG_MAX,
+  _IN_CURVE_LAT_ACC,
+  _IN_CURVE_MIN_ACC,
 )
 
 LongitudinalPlanSource = log.LongitudinalPlan.LongitudinalPlanSource
@@ -217,8 +219,49 @@ def test_output_v_target_never_lands_under_the_entry_gate():
   # ~4 m/s below the floor -- under the 20 km/h gate the state machine itself respects
   # (PR #2 review). Worst case: active, v_target already at the floor, hardest decel.
   scc = SmartCruiseControlVision(enabled=True)
-  _drive_into_turn(scc, MIN_V + 5)
-  assert scc.is_active
+  sm = _sm(_ENTERING_PRED_LAT_ACC_TH + 0.5)  # straight road, curve ahead: the cap applies
+  for _ in range(2):
+    scc.update(sm, True, False, MIN_V + 5, 0.0, V_CRUISE_MS)
+  assert scc.state == VisionState.entering
   scc.v_target = 0.0
   scc.a_target = -1.0
   assert scc.get_v_target_from_control() == MIN_V
+
+
+def _enter_on_straight(scc, v_ego, pred):
+  sm = _sm(pred)
+  for _ in range(2):
+    scc.update(sm, True, False, v_ego, 0.0, V_CRUISE_MS)
+  assert scc.state == VisionState.entering
+
+
+def test_speed_cap_only_before_the_curve():
+  # route 1c5: the cap stayed on inside the curve and held the cruise accel at -1.2 m/s^2
+  v_ego = 25.0
+  scc = SmartCruiseControlVision(enabled=True)
+  _enter_on_straight(scc, v_ego, 3.0)
+  assert scc.output_v_target < v_ego  # before the curve: slow down
+  # in the curve, still `entering` (lat acc under the turning threshold) -- no cap any more
+  scc.update(_sm(3.0, curvature=_IN_CURVE_LAT_ACC / v_ego ** 2 + 1e-4), True, False, v_ego, 0.0, V_CRUISE_MS)
+  assert scc.state == VisionState.entering
+  assert scc.output_v_target == V_TARGET_UNSET
+  _drive_into_turn(scc, v_ego)
+  assert scc.output_v_target == V_TARGET_UNSET
+
+
+def test_entering_decel_is_gentle_once_in_the_curve():
+  v_ego = 25.0
+  scc = SmartCruiseControlVision(enabled=True)
+  _enter_on_straight(scc, v_ego, 3.0)
+  assert scc.output_a_target < _IN_CURVE_MIN_ACC  # full decel before the curve
+  scc.update(_sm(3.0, curvature=_IN_CURVE_LAT_ACC / v_ego ** 2 + 1e-4), True, False, v_ego, 0.0, V_CRUISE_MS)
+  assert scc.output_a_target == _IN_CURVE_MIN_ACC
+
+
+def test_gentle_bend_does_not_trigger():
+  # route 1c5: predictions hovering at 1.1-1.3 flipped SCC-V on and off every 2-3 s
+  scc = SmartCruiseControlVision(enabled=True)
+  sm = _sm(1.4)
+  for _ in range(10):
+    scc.update(sm, True, False, 25.0, 0.0, V_CRUISE_MS)
+  assert scc.state == VisionState.enabled

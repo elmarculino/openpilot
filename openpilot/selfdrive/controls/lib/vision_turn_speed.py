@@ -30,13 +30,21 @@ class VisionState(IntEnum):
 ACTIVE_STATES = (VisionState.entering, VisionState.turning, VisionState.leaving)
 ENABLED_STATES = (VisionState.enabled, VisionState.overriding, *ACTIVE_STATES)
 
-_ENTERING_PRED_LAT_ACC_TH = 1.3
+# 1.5, not sunnypilot's 1.3: on long gentle bends (route 1c5) the prediction hovered at 1.1-1.3
+# and SCC-V flipped enabled<->entering every 2-3 s, alternating -0.2 and +0.4 m/s^2.
+_ENTERING_PRED_LAT_ACC_TH = 1.5
 _ABORT_ENTERING_PRED_LAT_ACC_TH = 1.1
 _TURNING_LAT_ACC_TH = 1.6
 _LEAVING_LAT_ACC_TH = 1.3
 _FINISH_LAT_ACC_TH = 1.1
 _A_LAT_REG_MAX = 2.0
 _NO_OVERSHOOT_TIME_HORIZON = 4.0
+# Brake for a curve before it, not in it. Once the car is already turning (measured lat acc at or
+# above this), the speed cap is released and SCC-V's own decel is limited to the `turning` floor.
+# Route 1c5: the cap stayed on inside the curve and, recomputed against the falling speed, kept the
+# cruise accel at its -1.2 m/s^2 floor (car measured -2.0) -- the "brakes mid-curve" complaint.
+_IN_CURVE_LAT_ACC = 0.6
+_IN_CURVE_MIN_ACC = -0.4
 
 _ENTERING_SMOOTH_DECEL_V = [-0.2, -1.]
 _ENTERING_SMOOTH_DECEL_BP = [1.3, 3.]
@@ -76,7 +84,7 @@ class SmartCruiseControlVision:
     return self.a_target
 
   def get_v_target_from_control(self) -> float:
-    if self.is_active:
+    if self.state == VisionState.entering and self.current_lat_acc < _IN_CURVE_LAT_ACC:
       # MIN_V floors the curve solution, but the no-overshoot term is a decel (down to -1 m/s^2 in
       # `entering`), so 4 s of it lands ~4 m/s under the floor -- below the 20 km/h entry gate the
       # state machine itself respects. Clamp after adding it so a later threshold tweak cannot ask
@@ -178,7 +186,8 @@ class SmartCruiseControlVision:
     if self.state not in ACTIVE_STATES:
       return self.a_ego
     if self.state == VisionState.entering:
-      return float(np.interp(self.max_pred_lat_acc, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
+      a = float(np.interp(self.max_pred_lat_acc, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
+      return max(a, _IN_CURVE_MIN_ACC) if self.current_lat_acc >= _IN_CURVE_LAT_ACC else a
     if self.state == VisionState.turning:
       return float(np.interp(self.current_lat_acc, _TURNING_ACC_BP, _TURNING_ACC_V))
     if self.state == VisionState.leaving:
