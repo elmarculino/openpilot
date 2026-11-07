@@ -3,6 +3,7 @@ import math
 import numpy as np
 from types import SimpleNamespace
 
+from opendbc.car.interfaces import ACCEL_MAX
 from openpilot.cereal import custom, log
 from openpilot.selfdrive.controls.lib.vision_turn_speed import (
   MIN_V,
@@ -352,7 +353,7 @@ def test_candidate_is_released_not_dropped():
     assert 0. <= scc.output_a_target - prev <= _A_TARGET_STEP_UP + 1e-9
     prev = scc.output_a_target
   assert not scc.has_candidate
-  assert prev >= 0.5 - _A_TARGET_STEP_UP
+  assert prev >= ACCEL_MAX - _A_TARGET_STEP_UP  # released all the way: removal cannot move the plan
 
 
 def test_in_curve_has_hysteresis():
@@ -381,3 +382,62 @@ def test_gentle_bend_does_not_trigger():
   for _ in range(10):
     scc.update(sm, True, False, 25.0, 0.0, V_CRUISE_MS)
   assert scc.state == VisionState.enabled
+
+
+def test_sharper_bend_hidden_by_a_predicted_slowdown():
+  # review round 3: lat 2.2 at 25 m/s, bend ahead 50% tighter (3.3 at today's speed) but reached at
+  # 18 m/s in the model's plan, so rate * vel is only 1.71 -- must still brake
+  v_ego, vel_ahead = V_HWY, 18.0
+  k_now = 2.2 / v_ego ** 2
+  rate = 1.5 * k_now * vel_ahead
+  sm = {"modelV2": SimpleNamespace(orientationRate=SimpleNamespace(z=[rate] * 33),
+                                   velocity=SimpleNamespace(x=[vel_ahead] * 33)),
+        "controlsState": SimpleNamespace(curvature=k_now)}
+  scc = SmartCruiseControlVision(enabled=True)
+  for _ in range(100):
+    scc.update(sm, True, False, v_ego, 0.0, V_CRUISE_MS)
+  assert abs(scc.max_pred_lat_acc - 1.71) < 0.01
+  assert abs(scc.pred_lat_acc_at_v_ego - 3.3) < 0.01
+  assert scc.output_a_target < -0.8  # 1.1 sharper at today's speed: most of the full -1.0 approach
+
+
+def test_leaving_into_a_curve_respects_min_v():
+  # review round 3: leaving -> entering skipped the 20 km/h gate
+  v = MIN_V - 0.5
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.0, lat=1.7, n=5, v_ego=MIN_V + 5)
+  _step(scc, 3.0, lat=1.2, n=5, v_ego=MIN_V + 5)
+  assert scc.state == VisionState.leaving
+  _step(scc, 3.0, lat=0.3, v_ego=v)
+  assert scc.state == VisionState.enabled
+
+
+def test_activation_does_not_prolong_harder_braking():
+  # review round 3: car at -2.0 (lead) entering a gentle approach: start at SCC-V's own solution
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 1.6, n=1, a_ego=-2.0)  # disabled -> enabled
+  _step(scc, 1.6, n=1, a_ego=-2.0)  # enabled -> entering
+  assert scc.state == VisionState.entering
+  assert scc.output_a_target > -0.4
+
+
+def test_activation_ramps_down_from_the_car_accel():
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.0, n=1, a_ego=0.5)
+  _step(scc, 3.0, n=1, a_ego=0.5)
+  assert scc.state == VisionState.entering
+  assert scc.output_a_target == 0.5 - _A_TARGET_STEP_DOWN
+
+
+def test_in_curve_latch_tracks_while_long_is_off():
+  # review round 3: override on a straight, bend during the override, re-enable at 0.5 (inside the
+  # hysteresis band): the latch must reflect the bend, not the straight
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 0.5, n=5)
+  assert not scc.in_curve
+  for _ in range(20):
+    scc.update(_sm(2.0, curvature=0.8 / V_HWY ** 2), False, False, V_HWY, 0.0, V_CRUISE_MS)
+  assert scc.in_curve
+  _step(scc, 2.0, lat=0.5, n=3)
+  assert scc.in_curve
+  assert scc.output_v_target == V_TARGET_UNSET
