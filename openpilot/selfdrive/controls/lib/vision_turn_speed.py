@@ -8,6 +8,7 @@ from enum import IntEnum
 
 import numpy as np
 
+from opendbc.car.interfaces import ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 
@@ -37,11 +38,32 @@ _LEAVING_LAT_ACC_TH = 1.3
 _FINISH_LAT_ACC_TH = 1.1
 _A_LAT_REG_MAX = 2.0
 _NO_OVERSHOOT_TIME_HORIZON = 4.0
+# Brake for a curve before it, not in it. Route 1c5: the speed cap stayed on inside curves and,
+# recomputed against the falling speed, held the cruise accel at its -1.2 m/s^2 floor (car measured
+# -2.0) -- the "brakes mid-curve" complaint. So the cap only applies on the approach from a straight;
+# inside a curve (measured lat acc, with hysteresis) SCC-V brakes only through its own candidate.
+_IN_CURVE_ON_LAT_ACC = 0.6
+_IN_CURVE_OFF_LAT_ACC = 0.4
+# Inside a curve, how much sharper the curve ahead is (predicted minus current lat acc) decides the
+# response, graded so a dithering prediction cannot flip it: any positive request fades out over
+# 0.3-0.6 m/s^2 (never accelerate toward a sharper curve), then the pre-curve decel fades in up to
+# its full value at 1.2.
+_NO_ACCEL_AHEAD_BP = [0.3, 0.6]
+_APPROACH_AHEAD_BP = [0.6, 1.2]
+# Past 3.0 m/s^2 measured the curve is taken too fast to stay gentle: the turning table brakes down
+# to -1.0 by 3.5 (backstop), and `enabled` goes straight to `turning` so it always applies.
+_BACKSTOP_LAT_ACC = 3.0
+# SCC-V's candidate bypasses the cruise jerk limit, so it carries its own: braking builds at up to
+# 2 m/s^3 and releases at 1 m/s^3. When SCC-V stops being active the candidate is not dropped but
+# released at that rate up to the planner's ACCEL_MAX (where it can no longer bind), so the planner
+# never sees a jump. On activation it ramps from the car's accel, but never from below its own solution.
+_A_TARGET_STEP_DOWN = 2.0 * DT_MDL
+_A_TARGET_STEP_UP = 1.0 * DT_MDL
 
 _ENTERING_SMOOTH_DECEL_V = [-0.2, -1.]
 _ENTERING_SMOOTH_DECEL_BP = [1.3, 3.]
-_TURNING_ACC_V = [0.5, 0., -0.4]
-_TURNING_ACC_BP = [1.5, 2.3, 3.]
+_TURNING_ACC_V = [0.5, 0., -0.4, -1.0]
+_TURNING_ACC_BP = [1.5, 2.3, 3., 3.5]
 _LEAVING_ACC = 0.5
 
 
@@ -71,12 +93,25 @@ class SmartCruiseControlVision:
     self.state = VisionState.disabled
     self.current_lat_acc = 0.
     self.max_pred_lat_acc = 0.
+    self.pred_lat_acc_at_v_ego = 0.  # the curve ahead at today's speed, not the model's future speed
+    self.in_curve = False
+    self.has_candidate = False  # planner: SCC-V's accel candidate is live (active, or releasing)
+    self.releasing = False
+
+  @property
+  def sharper_ahead(self) -> float:
+    """How much sharper the curve ahead is than the current one, both at the current speed (0 when
+    not in a curve). Curvature only: the model's own lat acc uses its future speeds, so a predicted
+    slowdown hid a tighter bend (review round 3) and a predicted speed-up faked one (round 4)."""
+    if not self.in_curve:
+      return 0.
+    return max(self.pred_lat_acc_at_v_ego - self.current_lat_acc, 0.)
 
   def get_a_target_from_control(self) -> float:
     return self.a_target
 
   def get_v_target_from_control(self) -> float:
-    if self.is_active:
+    if self.state == VisionState.entering and not self.in_curve:
       # MIN_V floors the curve solution, but the no-overshoot term is a decel (down to -1 m/s^2 in
       # `entering`), so 4 s of it lands ~4 m/s under the floor -- below the 20 km/h entry gate the
       # state machine itself respects. Clamp after adding it so a later threshold tweak cannot ask
@@ -105,12 +140,10 @@ class SmartCruiseControlVision:
     # `turning` (exit needs current_lat_acc <= _LEAVING_LAT_ACC_TH), commanding decel forever.
     self.current_lat_acc = 0.
     self.max_pred_lat_acc = 0.
+    self.pred_lat_acc_at_v_ego = 0.
     self.v_target = self.v_cruise_setpoint
 
   def _update_calculations(self, sm) -> None:
-    if not self.long_enabled:
-      return
-
     try:
       rate_plan = np.abs(sm['modelV2'].orientationRate.z)
       vel_plan = np.array(sm['modelV2'].velocity.x)
@@ -122,12 +155,22 @@ class SmartCruiseControlVision:
       self._reset_calculations()
       return
 
+    # tracked even while long is off, so the in-curve latch is current when it comes back
+    self.current_lat_acc = self.v_ego ** 2 * curvature
+    if not self.long_enabled:
+      return
+
     n = min(len(rate_plan), len(vel_plan))
     if n == 0:
       self._reset_calculations()
       return
 
-    self.current_lat_acc = self.v_ego ** 2 * curvature
+    moving = vel_plan[:n] > 1.
+    if np.any(moving):
+      pred_curvature = float(np.percentile(rate_plan[:n][moving] / vel_plan[:n][moving], 97))
+      self.pred_lat_acc_at_v_ego = self.v_ego ** 2 * pred_curvature if np.isfinite(pred_curvature) else 0.
+    else:
+      self.pred_lat_acc_at_v_ego = 0.
 
     predicted_lat_accels = rate_plan[:n] * vel_plan[:n]
     self.max_pred_lat_acc = float(np.percentile(predicted_lat_accels, 97))
@@ -151,15 +194,19 @@ class SmartCruiseControlVision:
         if self.state == VisionState.enabled:
           if self.v_ego <= MIN_V:
             pass
-          elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH:
+          elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH or self.sharper_ahead >= _APPROACH_AHEAD_BP[0]:
+            # the second term: in a curve, a tighter bend the model's slowdown keeps under the threshold
             self.state = VisionState.entering
+          elif self.current_lat_acc >= _BACKSTOP_LAT_ACC:
+            # already deep in a sharp curve the model no longer predicts: the backstop still applies
+            self.state = VisionState.turning
         elif self.state == VisionState.overriding:
           # reached only when long_override just went False (the elif above catches it otherwise)
           self.state = VisionState.enabled
         elif self.state == VisionState.entering:
           if self.current_lat_acc >= _TURNING_LAT_ACC_TH:
             self.state = VisionState.turning
-          elif self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH:
+          elif self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH and self.sharper_ahead < _APPROACH_AHEAD_BP[0]:
             self.state = VisionState.enabled
         elif self.state == VisionState.turning:
           if self.current_lat_acc <= _LEAVING_LAT_ACC_TH:
@@ -168,25 +215,47 @@ class SmartCruiseControlVision:
           if self.current_lat_acc >= _TURNING_LAT_ACC_TH:
             self.state = VisionState.turning
           elif self.current_lat_acc < _FINISH_LAT_ACC_TH:
-            self.state = VisionState.enabled
+            # straight into the next curve: approach it instead of dropping out and re-entering
+            entering = self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH and self.v_ego > MIN_V
+            self.state = VisionState.entering if entering else VisionState.enabled
     elif self.long_enabled and self.enabled:
       self.state = VisionState.overriding if self.long_override else VisionState.enabled
 
     return self.state in ENABLED_STATES, self.state in ACTIVE_STATES
 
+  def _update_in_curve(self) -> None:
+    if self.current_lat_acc >= _IN_CURVE_ON_LAT_ACC:
+      self.in_curve = True
+    elif self.current_lat_acc < _IN_CURVE_OFF_LAT_ACC:
+      self.in_curve = False
+
   def _update_solution(self) -> float:
     if self.state not in ACTIVE_STATES:
       return self.a_ego
-    if self.state == VisionState.entering:
-      return float(np.interp(self.max_pred_lat_acc, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
-    if self.state == VisionState.turning:
-      return float(np.interp(self.current_lat_acc, _TURNING_ACC_BP, _TURNING_ACC_V))
-    if self.state == VisionState.leaving:
-      return _LEAVING_ACC
-    raise NotImplementedError(f"SCC-V state not supported: {self.state}")
+    approach = float(np.interp(self.max_pred_lat_acc, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
+    if self.state == VisionState.entering and not self.in_curve:
+      return approach
+    # in a curve, size the response to the bend ahead at today's speed (see sharper_ahead)
+    approach = float(np.interp(self.pred_lat_acc_at_v_ego, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
+    if self.state in (VisionState.turning, VisionState.entering):
+      # `entering` while already in a gentle curve gets the in-curve policy too: no standing decel for
+      # a bend that is not getting sharper (Fable/Sol votes: -0.2..-0.3 held through long sweepers,
+      # then released to +0.5 -- a slow brake/accelerate cycle)
+      own = float(np.interp(self.current_lat_acc, _TURNING_ACC_BP, _TURNING_ACC_V))
+    elif self.state == VisionState.leaving:
+      own = _LEAVING_ACC
+    else:
+      raise NotImplementedError(f"SCC-V state not supported: {self.state}")
+    ahead = self.sharper_ahead
+    if own > 0.:
+      own *= float(np.interp(ahead, _NO_ACCEL_AHEAD_BP, [1., 0.]))
+    w = float(np.interp(ahead, _APPROACH_AHEAD_BP, [0., 1.]))
+    return min(own, own + w * (approach - own))
 
   def update(self, sm, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float,
-             v_cruise_setpoint: float) -> None:
+             v_cruise_setpoint: float, a_plan_prev: float | None = None) -> None:
+    """a_plan_prev: the planner's last output accel, so a mid-release restart never jumps away from a
+    target that was actually binding (defaults to a_ego)."""
     self.long_enabled = long_enabled
     self.long_override = long_override
     self.v_ego = v_ego
@@ -195,8 +264,35 @@ class SmartCruiseControlVision:
 
     self._update_params()
     self._update_calculations(sm)
+    self._update_in_curve()
     self.is_enabled, self.is_active = self._update_state_machine()
-    self.a_target = self._update_solution()
+    if self.is_active:
+      solution = self._update_solution()
+      if self.state == VisionState.entering and not self.in_curve:
+        # straight approach: unchanged from sunnypilot (the driver-approved pre-curve braking)
+        self.a_target = solution
+      else:
+        # in a curve: ramp from the live candidate; a new one starts from the car's accel, but not
+        # below its own solution -- a car already braking harder (lead) must not have SCC-V prolong it
+        start = max(self.a_ego, solution)
+        if self.releasing:
+          # re-activated mid-release: restart from what the planner actually did, which is the
+          # released target itself when that was binding, and far below it when it was not
+          planned = self.a_ego if a_plan_prev is None else a_plan_prev
+          prev = min(self.a_target, max(planned, solution))
+        else:
+          prev = self.a_target if self.has_candidate else start
+        self.a_target = float(np.clip(solution, prev - _A_TARGET_STEP_DOWN, prev + _A_TARGET_STEP_UP))
+      self.has_candidate = True
+      self.releasing = False
+    elif self.has_candidate and self.state == VisionState.enabled and self.a_target < ACCEL_MAX:
+      self.a_target += _A_TARGET_STEP_UP  # release, do not drop
+      self.releasing = True
+    else:
+      # idle, release done, or disabled / overriding (long off or the driver has it): no candidate
+      self.has_candidate = False
+      self.releasing = False
+      self.a_target = self._update_solution()
     self.output_v_target = self.get_v_target_from_control()
     self.output_a_target = self.get_a_target_from_control()
     self.frame += 1
