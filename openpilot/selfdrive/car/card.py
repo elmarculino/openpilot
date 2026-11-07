@@ -20,6 +20,7 @@ from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.selfdrive.car.gwm_lat_state import A_RX_OBEYING, GwmLatTracker, lat_block_reason
 
 REPLAY = "REPLAY" in os.environ
 
@@ -151,6 +152,11 @@ class Car:
 
     self.v_cruise_helper = VCruiseHelper(self.CP)
 
+    # H6 MK4 (MADS-lite, pcmCruise=False): gwmLatState only exists there, so do not claim the socket
+    # elsewhere (services.py rate)
+    self.gwm_lat = GwmLatTracker()
+    self.gwm_pm = messaging.PubMaster(['gwmLatState']) if self.CP.brand == 'gwm' and not self.CP.pcmCruise else None
+
     self.is_metric = self.params.get_bool("IsMetric")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
 
@@ -237,8 +243,30 @@ class Car:
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
+      self.publish_gwm_lat_state(CS, CC)
 
       self.CC_prev = CC
+
+  def publish_gwm_lat_state(self, CS: car.CarState, CC: car.CarControl):
+    # H6 MK4 only: the override latch lives on the carcontroller, A_RX on the carstate
+    # log only, in the actuation loop: it must never take card (and carState) down with it
+    if self.gwm_pm is None:
+      return
+    try:
+      a_rx = int(self.CI.CS.eps_stock_values.get("A_RX_STEER_REQUESTED", A_RX_OBEYING))  # {} before the first update
+      self.gwm_lat.update(lat_block_reason(enabled=CC.enabled, lat_active=CC.latActive, standstill=CS.standstill,
+                                           override_active=self.CI.CC.override_active, a_rx=a_rx))
+      msg = messaging.new_message('gwmLatState')
+      msg.valid = True
+      gs = msg.gwmLatState
+      gs.reason = self.gwm_lat.reason
+      gs.frames = min(self.gwm_lat.frames, 0xFFFF)
+      gs.aRx = max(0, min(a_rx, 0xFF))
+      gs.driverTorque = float(CS.steeringTorque)
+      gs.angleErrorDeg = float(CC.actuators.steeringAngleDeg - CS.steeringAngleDeg)
+      self.gwm_pm.send('gwmLatState', msg)
+    except Exception:
+      cloudlog.exception("card: gwmLatState publish failed")
 
   def step(self):
     CS, RD = self.state_update()

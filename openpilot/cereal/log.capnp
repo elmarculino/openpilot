@@ -2638,7 +2638,7 @@ struct Event {
     # DON'T change which struct it points to
     sccvState @107 :Custom.SmartCruiseControlVisionState;
     madsState @108 :Custom.MadsState;
-    customReserved2 @109 :Custom.CustomReserved2;
+    gwmLatState @109 :Custom.GwmLatState;
     customReserved3 @110 :Custom.CustomReserved3;
     customReserved4 @111 :Custom.CustomReserved4;
     customReserved5 @112 :Custom.CustomReserved5;
