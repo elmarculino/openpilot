@@ -237,7 +237,10 @@ V_HWY = 25.0
 
 
 def _step(scc, pred, lat=0.0, n=1, v_ego=V_HWY, a_ego=0.0):
-  sm = _sm(pred, curvature=lat / v_ego ** 2)
+  # model plan at constant speed: model lat acc == lat acc at today's speed == pred
+  sm = {"modelV2": SimpleNamespace(orientationRate=SimpleNamespace(z=[pred / v_ego] * 33),
+                                   velocity=SimpleNamespace(x=[v_ego] * 33)),
+        "controlsState": SimpleNamespace(curvature=lat / v_ego ** 2)}
   for _ in range(n):
     scc.update(sm, True, False, v_ego, a_ego, V_CRUISE_MS)
 
@@ -268,7 +271,7 @@ def test_sharper_curve_ahead_keeps_the_approach_response():
   scc = SmartCruiseControlVision(enabled=True)
   _step(scc, 3.0, lat=0.61, n=100)
   assert scc.in_curve
-  assert scc.output_a_target == -1.0
+  assert math.isclose(scc.output_a_target, -1.0)
 
 
 def test_tighter_curve_under_a_fixed_margin_still_brakes():
@@ -287,7 +290,7 @@ def test_turning_never_accelerates_toward_a_sharper_curve():
     assert scc.output_a_target <= 1e-9
   _step(scc, 3.0, lat=1.2, n=100)  # leaving, sharper bend next
   assert scc.state == VisionState.leaving
-  assert scc.output_a_target == -1.0
+  assert math.isclose(scc.output_a_target, -1.0)
 
 
 def test_response_is_continuous_in_the_prediction():
@@ -344,7 +347,7 @@ def test_candidate_is_released_not_dropped():
   # review round 2: a settled -1.0 must not vanish when SCC-V goes inactive (here: model dropout)
   scc = SmartCruiseControlVision(enabled=True)
   _step(scc, 3.5, lat=3.5, n=100)
-  assert scc.output_a_target == -1.0
+  assert math.isclose(scc.output_a_target, -1.0)
   prev = scc.output_a_target
   for _ in range(100):
     scc.update({}, True, False, V_HWY, 0.0, V_CRUISE_MS)
@@ -369,9 +372,15 @@ def test_candidate_is_rate_limited():
   prev = None
   for k in range(400):
     lat = [0.0, 0.61, 1.7, 0.3, 3.5][(k // 40) % 5]
-    _step(scc, 3.0 if k % 7 else 1.0, lat=lat, a_ego=1.5 if k % 3 else -1.5)
+    a_ego = 1.5 if k % 3 else -1.5
+    was_releasing = scc.releasing
+    _step(scc, 3.0 if k % 7 else 1.0, lat=lat, a_ego=a_ego)
     if scc.has_candidate and prev is not None:
-      assert -_A_TARGET_STEP_DOWN - 1e-9 <= scc.output_a_target - prev <= _A_TARGET_STEP_UP + 1e-9
+      if was_releasing and scc.is_active:
+        # mid-release restart: may drop to the car's accel (the released target was not binding)
+        assert scc.output_a_target >= min(prev, a_ego) - _A_TARGET_STEP_DOWN - 1e-9
+      else:
+        assert -_A_TARGET_STEP_DOWN - 1e-9 <= scc.output_a_target - prev <= _A_TARGET_STEP_UP + 1e-9
     prev = scc.output_a_target if scc.has_candidate else None
 
 
@@ -441,3 +450,56 @@ def test_in_curve_latch_tracks_while_long_is_off():
   _step(scc, 2.0, lat=0.5, n=3)
   assert scc.in_curve
   assert scc.output_v_target == V_TARGET_UNSET
+
+
+def _sm_curve(k_now, k_ahead, vel_ahead):
+  return {"modelV2": SimpleNamespace(orientationRate=SimpleNamespace(z=[k_ahead * vel_ahead] * 33),
+                                     velocity=SimpleNamespace(x=[vel_ahead] * 33)),
+          "controlsState": SimpleNamespace(curvature=k_now)}
+
+
+def test_predicted_speed_up_is_not_a_sharper_curve():
+  # review round 4: constant-radius bend at 25 m/s / 2.2 m/s^2, model plan accelerating to 32 m/s
+  k = 2.2 / V_HWY ** 2
+  scc = SmartCruiseControlVision(enabled=True)
+  for _ in range(100):
+    scc.update(_sm_curve(k, k, 32.0), True, False, V_HWY, 0.0, V_CRUISE_MS)
+  assert scc.max_pred_lat_acc > 3.4  # what the old comparison saw
+  assert scc.sharper_ahead < 0.01
+  assert scc.output_a_target > -0.45
+
+
+def test_tighter_bend_activates_despite_a_predicted_slowdown():
+  # review round 4: lat 1.2 now, bend reaching 3.3 at today's speed, model slowing so rate * vel = 1.2
+  k_now, k_ahead = 1.2 / V_HWY ** 2, 3.3 / V_HWY ** 2
+  vel = (1.2 / k_ahead) ** 0.5
+  scc = SmartCruiseControlVision(enabled=True)
+  for _ in range(100):
+    scc.update(_sm_curve(k_now, k_ahead, vel), True, False, V_HWY, 0.0, V_CRUISE_MS)
+  assert scc.max_pred_lat_acc < _ENTERING_PRED_LAT_ACC_TH
+  assert scc.is_active
+  assert scc.output_a_target < -0.9
+
+
+def test_reactivation_mid_release_restarts_from_the_car():
+  # review round 4: release at +1.4 while the car does 0, then a new curve wants -1.0
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 3.5, lat=3.5, n=100)
+  for _ in range(48):  # -1.0 -> +1.4 while released
+    scc.update({}, True, False, V_HWY, 0.0, V_CRUISE_MS)
+  assert scc.releasing and scc.output_a_target > 1.3
+  _step(scc, 3.0, lat=0.7)
+  assert scc.is_active
+  assert scc.output_a_target <= 0.
+
+
+def test_no_jump_while_active():
+  # the mid-release restart must not apply during normal operation
+  scc = SmartCruiseControlVision(enabled=True)
+  _step(scc, 2.0, n=3)
+  _step(scc, 1.0, lat=1.7, n=100, a_ego=-0.2)
+  assert scc.state == VisionState.turning
+  prev = scc.output_a_target
+  assert prev > 0.2
+  _step(scc, 3.0, lat=1.7, a_ego=-0.2)
+  assert prev - scc.output_a_target <= _A_TARGET_STEP_DOWN + 1e-9

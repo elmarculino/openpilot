@@ -99,15 +99,16 @@ class SmartCruiseControlVision:
     self.pred_lat_acc_at_v_ego = 0.  # the curve ahead at today's speed, not the model's future speed
     self.in_curve = False
     self.has_candidate = False  # planner: SCC-V's accel candidate is live (active, or releasing)
+    self.releasing = False
 
   @property
   def sharper_ahead(self) -> float:
     """How much sharper the curve ahead is than the current one, both at the current speed (0 when
-    not in a curve). The model's own lat acc uses its future speeds, and a predicted slowdown would
-    hide the tighter bend (review round 3)."""
+    not in a curve). Curvature only: the model's own lat acc uses its future speeds, so a predicted
+    slowdown hid a tighter bend (review round 3) and a predicted speed-up faked one (round 4)."""
     if not self.in_curve:
       return 0.
-    return max(max(self.max_pred_lat_acc, self.pred_lat_acc_at_v_ego) - self.current_lat_acc, 0.)
+    return max(self.pred_lat_acc_at_v_ego - self.current_lat_acc, 0.)
 
   def get_a_target_from_control(self) -> float:
     return self.a_target
@@ -196,7 +197,8 @@ class SmartCruiseControlVision:
         if self.state == VisionState.enabled:
           if self.v_ego <= MIN_V:
             pass
-          elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH:
+          elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH or self.sharper_ahead >= _APPROACH_AHEAD_BP[0]:
+            # the second term: in a curve, a tighter bend the model's slowdown keeps under the threshold
             self.state = VisionState.entering
           elif self.current_lat_acc >= _IN_CURVE_MIN_ACC_BP[0]:
             # already deep in a sharp curve the model no longer predicts: the backstop still applies
@@ -207,7 +209,7 @@ class SmartCruiseControlVision:
         elif self.state == VisionState.entering:
           if self.current_lat_acc >= _TURNING_LAT_ACC_TH:
             self.state = VisionState.turning
-          elif self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH:
+          elif self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH and self.sharper_ahead < _APPROACH_AHEAD_BP[0]:
             self.state = VisionState.enabled
         elif self.state == VisionState.turning:
           if self.current_lat_acc <= _LEAVING_LAT_ACC_TH:
@@ -236,9 +238,8 @@ class SmartCruiseControlVision:
     approach = float(np.interp(self.max_pred_lat_acc, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
     if self.state == VisionState.entering and not self.in_curve:
       return approach
-    # in a curve, size the response to the bend ahead at today's speed as well (see sharper_ahead)
-    pred_now = max(self.max_pred_lat_acc, self.pred_lat_acc_at_v_ego)
-    approach = float(np.interp(pred_now, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
+    # in a curve, size the response to the bend ahead at today's speed (see sharper_ahead)
+    approach = float(np.interp(self.pred_lat_acc_at_v_ego, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V))
     if self.state == VisionState.turning:
       own = float(np.interp(self.current_lat_acc, _TURNING_ACC_BP, _TURNING_ACC_V))
     elif self.state == VisionState.leaving:
@@ -269,14 +270,22 @@ class SmartCruiseControlVision:
       solution = self._update_solution()
       # ramp from the live candidate; a new one starts from the car's accel, but not below its own
       # solution -- a car already braking harder (lead) must not have SCC-V prolong it (review round 3)
-      prev = self.a_target if self.has_candidate else max(self.a_ego, solution)
+      start = max(self.a_ego, solution)
+      if self.releasing:
+        # re-activated mid-release: the released target may sit far above what the car does (round 4)
+        prev = min(self.a_target, start)
+      else:
+        prev = self.a_target if self.has_candidate else start
       self.a_target = float(np.clip(solution, prev - _A_TARGET_STEP_DOWN, prev + _A_TARGET_STEP_UP))
       self.has_candidate = True
+      self.releasing = False
     elif self.has_candidate and self.state == VisionState.enabled and self.a_target < ACCEL_MAX:
       self.a_target += _A_TARGET_STEP_UP  # release, do not drop
+      self.releasing = True
     else:
       # idle, release done, or disabled / overriding (long off or the driver has it): no candidate
       self.has_candidate = False
+      self.releasing = False
       self.a_target = self._update_solution()
     self.output_v_target = self.get_v_target_from_control()
     self.output_a_target = self.get_a_target_from_control()
