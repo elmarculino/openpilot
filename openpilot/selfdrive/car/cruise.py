@@ -32,6 +32,8 @@ CRUISE_INTERVAL_SIGN = {
 # The press reaches card at frame N, selfdrived/controlsd act on it, and longActive comes back on
 # carControl a frame or two later; 0.5 s absorbs socket skew without matching an unrelated edge.
 LONG_ENGAGE_WINDOW = int(0.5 / DT_CTRL)
+# GWM: releasing the gas at least this much above the set speed makes the release speed the new set speed.
+GAS_SET_SPEED_MARGIN = 2  # kph
 
 
 class VCruiseHelper:
@@ -44,6 +46,8 @@ class VCruiseHelper:
     self.button_change_states = {btn: {"standstill": False, "enabled": False} for btn in self.button_timers}
     self.lat_only_engage = uses_h6_mads(CP)
     self.set_press_frames = 0
+    self.gas_set_speed = CP.brand == "gwm" and not CP.pcmCruise
+    self.gas_override = False
 
   def should_initialize(self, CS, enabled: bool, enabled_prev: bool, long_active: bool, long_active_prev: bool) -> bool:
     """Whether to (re)initialize the set speed this frame.
@@ -98,6 +102,26 @@ class VCruiseHelper:
       if self.CP.pcmCruise:
         self.v_cruise_kph = V_CRUISE_UNSET
         self.v_cruise_cluster_kph = V_CRUISE_UNSET
+
+  def update_gas_set_speed(self, CS, enabled: bool, long_active: bool, long_active_prev: bool) -> None:
+    """Set the max speed with the gas pedal: release it above the set speed and that speed becomes the
+    new set speed (never lowered). Only for a press that overrode engaged ACC, not lat-only steering."""
+    if not self.gas_set_speed:
+      return
+    if not enabled or not CS.cruiseState.available:
+      self.gas_override = False
+      return
+    if CS.gasPressed:
+      # carControl lags carState by a frame, so the first pressed frame can still show longActive
+      if long_active or long_active_prev:
+        self.gas_override = True
+      return
+    if self.gas_override:
+      self.gas_override = False
+      v_release = round(CS.vEgo * CV.MS_TO_KPH)
+      if self.v_cruise_initialized and v_release > self.v_cruise_kph + GAS_SET_SPEED_MARGIN:
+        self.v_cruise_kph = float(np.clip(v_release, V_CRUISE_MIN, V_CRUISE_MAX))
+        self.v_cruise_cluster_kph = self.v_cruise_kph
 
   def _update_v_cruise_non_pcm(self, CS, enabled, is_metric):
     # handle button presses. TODO: this should be in state_control, but a decelCruise press

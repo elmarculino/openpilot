@@ -188,6 +188,7 @@ class Car:
 
     CC = self.sm['carControl']
     self.v_cruise_helper.update_v_cruise(CS, CC.enabled, self.is_metric)
+    self.v_cruise_helper.update_gas_set_speed(CS, CC.enabled, CC.longActive, self.CC_prev.longActive)
     if self.v_cruise_helper.should_initialize(CS, CC.enabled, self.CC_prev.enabled, CC.longActive, self.CC_prev.longActive):
       # Use CarState w/ buttons from the step selfdrived enables on
       self.v_cruise_helper.initialize_v_cruise(self.CS_prev, self.experimental_mode)
