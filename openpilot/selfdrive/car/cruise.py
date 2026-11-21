@@ -34,6 +34,7 @@ CRUISE_INTERVAL_SIGN = {
 LONG_ENGAGE_WINDOW = int(0.5 / DT_CTRL)
 # GWM: releasing the gas at least this much above the set speed makes the release speed the new set speed.
 GAS_SET_SPEED_MARGIN = 2  # kph
+GAS_SET_SPEED_STEP = 5  # kph, the GWM camera's set-speed grid
 
 
 class VCruiseHelper:
@@ -119,8 +120,11 @@ class VCruiseHelper:
     if self.gas_override:
       self.gas_override = False
       v_release = round(CS.vEgo * CV.MS_TO_KPH)
-      if self.v_cruise_initialized and v_release > self.v_cruise_kph + GAS_SET_SPEED_MARGIN:
-        self.v_cruise_kph = float(np.clip(v_release, V_CRUISE_MIN, V_CRUISE_MAX))
+      # GWM MK4: the cluster shows the camera's set speed, which only moves in 5 km/h clicks (the carcontroller clicks
+      # it up to ours), so land on the camera's grid: nearest multiple of 5.
+      v_set = int(v_release / GAS_SET_SPEED_STEP + 0.5) * GAS_SET_SPEED_STEP
+      if self.v_cruise_initialized and v_release > self.v_cruise_kph + GAS_SET_SPEED_MARGIN and v_set > self.v_cruise_kph:
+        self.v_cruise_kph = float(np.clip(v_set, V_CRUISE_MIN, V_CRUISE_MAX))
         self.v_cruise_cluster_kph = self.v_cruise_kph
 
   def _update_v_cruise_non_pcm(self, CS, enabled, is_metric):

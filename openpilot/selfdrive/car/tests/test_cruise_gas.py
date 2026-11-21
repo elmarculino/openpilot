@@ -1,5 +1,5 @@
 """Set the max speed with the gas pedal (GWM, openpilot long): release the pedal above the set speed and
-the set speed becomes the speed you released at. Drives VCruiseHelper the way card.py does."""
+the set speed becomes the speed you released at, rounded to the nearest 5 km/h (the GWM camera grid). Drives VCruiseHelper the way card.py does."""
 from opendbc.car.structs import car
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import VCruiseHelper, GAS_SET_SPEED_MARGIN, V_CRUISE_MAX
@@ -45,8 +45,16 @@ def test_release_above_set_speed_raises_it():
   sim = CardSim(_cp())
   assert _engaged_at(sim, 80) == 80
   _press_gas(sim, 97.4)
-  assert sim.step(97.4, True, False) == 97  # pedal up
-  assert sim.step(97.4, True, True, n=10) == 97
+  assert sim.step(97.4, True, False) == 95  # pedal up: nearest 5 (the camera's set-speed grid)
+  assert sim.step(97.4, True, True, n=10) == 95
+
+
+def test_release_lands_on_the_camera_grid():
+  for v_release, v_set in ((83, 85), (88, 90), (91.4, 90), (103, 105)):
+    sim = CardSim(_cp())
+    _engaged_at(sim, 80)
+    _press_gas(sim, v_release)
+    assert sim.step(v_release, True, False) == v_set, v_release
 
 
 def test_set_speed_unchanged_while_the_pedal_is_down():
