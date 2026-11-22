@@ -138,15 +138,17 @@ class VCruiseHelper:
 
     v_cruise_delta = 1. if is_metric else IMPERIAL_INCREMENT
 
+    long_released = set()
     for b in CS.buttonEvents:
       if b.type.raw in self.button_timers and not b.pressed:
         if self.button_timers[b.type.raw] > CRUISE_LONG_PRESS:
-          return  # end long press
+          long_released.add(b.type.raw)  # end long press; the other button may still be due this frame
+          continue
         button_type = b.type.raw
         break
-    else:
+    if button_type is None:
       for k, timer in self.button_timers.items():
-        if timer and timer % CRUISE_LONG_PRESS == 0:
+        if k not in long_released and timer and timer % CRUISE_LONG_PRESS == 0:
           button_type = k
           long_press = True
           break

@@ -108,3 +108,16 @@ def test_other_brands_unchanged():
   _engaged_at(sim, 80)
   _press_gas(sim, 110)
   assert sim.step(110, True, False) == 80
+
+
+def test_long_press_release_does_not_eat_the_other_buttons_step():
+  # GWM MK4 stretches each wheel click into a 54-frame long press. UP then DOWN: the UP press ends on the same frame
+  # the DOWN press reaches CRUISE_LONG_PRESS; both steps must apply (was: the release returned early, DOWN lost).
+  sim = CardSim(_cp())
+  assert _engaged_at(sim, 60) == 60
+  sim.step(60, True, True, buttons=((ButtonType.accelCruise, True),))
+  sim.step(60, True, True, n=3)
+  sim.step(60, True, True, buttons=((ButtonType.decelCruise, True),))
+  sim.step(60, True, True, n=47)  # UP stepped +5 at timer 50
+  sim.step(60, True, True, n=2)
+  assert sim.step(60, True, True, buttons=((ButtonType.accelCruise, False),)) == 60  # UP ends (timer 54), DOWN due (timer 50): 65 - 5
