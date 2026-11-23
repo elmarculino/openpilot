@@ -59,11 +59,14 @@ class VCruiseHelper:
     30 km/h, detent at 100 km/h, and ACC brakes toward 30. Re-initialize on the longActive rising
     edge, but only when a setCruise press caused it: longActive also rises when a gas override ends,
     and resetting the set speed to vEgo there would break the normal "overtake, lift, resume".
+    A detent pulled with the gas pedal down arms ACC only when the pedal comes up (gasPressedOverride holds
+    longActive off), so the window does not run down while the pedal is held: lifting 1 s after the detent
+    kept the old set speed (lat-only at 30, detent at 100 -> ACC braked toward 30; full review 2026-11-22).
     """
     if self.lat_only_engage:
       if not long_active and any(b.type == ButtonType.setCruise and b.pressed for b in CS.buttonEvents):
         self.set_press_frames = LONG_ENGAGE_WINDOW
-      elif self.set_press_frames > 0:
+      elif self.set_press_frames > 0 and not CS.gasPressed:
         self.set_press_frames -= 1
 
     long_engage = self.set_press_frames > 0 and enabled_prev and long_active and not long_active_prev
@@ -76,9 +79,9 @@ class VCruiseHelper:
     return self.v_cruise_kph != V_CRUISE_UNSET
 
   def update_v_cruise(self, CS, enabled, is_metric):
-    # Never remember UNSET as "last set speed" — cancel/available-off would otherwise
-    # poison resume with 255 after one extra frame.
-    if self.v_cruise_kph != V_CRUISE_UNSET:
+    # GWM: never remember UNSET as "last set speed" — cancel/available-off would otherwise
+    # poison resume with 255 after one extra frame. Other brands: upstream.
+    if self.v_cruise_kph != V_CRUISE_UNSET or not self.lat_only_engage:
       self.v_cruise_kph_last = self.v_cruise_kph
 
     if CS.cruiseState.available:
@@ -97,10 +100,10 @@ class VCruiseHelper:
           self.v_cruise_kph = -1
           self.v_cruise_cluster_kph = -1
     else:
-      # pcmCruise: main switch off → clear. non-pcm (OP_CRUISE): cancel often pulses
-      # available off every disengage; wiping here publishes vCruise=255 and loses the
-      # previous set speed until initialize runs (and can stick if that edge is missed).
-      if self.CP.pcmCruise:
+      # Main switch off → clear (upstream). GWM OP_CRUISE: cancel often pulses available off every
+      # disengage; wiping here publishes vCruise=255 and loses the previous set speed until initialize
+      # runs (and can stick if that edge is missed). Other non-pcm brands keep upstream's clear.
+      if not self.lat_only_engage:
         self.v_cruise_kph = V_CRUISE_UNSET
         self.v_cruise_cluster_kph = V_CRUISE_UNSET
 

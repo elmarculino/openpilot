@@ -142,8 +142,8 @@ class CarEvents:
       events.add(EventName.steerDisengage)
     if CS.brakePressed and CS.standstill:
       # H6 MK4 MADS: allow lat engage with foot on the brake (standstill / speed bump).
-      # Safe for ACC too because mk4_stalk.update_mk4_down_gestures refuses to latch any gesture
-      # below abs(v_ego) > 0.5 -- see test_mk4_stalk.test_standstill_emits_no_gesture_at_all.
+      # ACC stays off: H6Mads.update never arms it with the pedal down (brake_held), and the panda
+      # blocks active longitudinal from a brake until the next detent.
       if not uses_h6_mads(self.CP):
         events.add(EventName.preEnableStandstill)
     if CS.gasPressed:

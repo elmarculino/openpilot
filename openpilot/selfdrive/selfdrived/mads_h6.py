@@ -75,8 +75,13 @@ class H6Mads:
       self.mismatch = True
       cloudlog.error("mads_h6: engaged with no panda allowing controls, disengaging")
 
-  def update(self, *, engaged: bool, user_brake: bool, lkas_tap: bool, acc_enable: bool) -> tuple[bool, bool]:
+  def update(self, *, engaged: bool, user_brake: bool, lkas_tap: bool, acc_enable: bool,
+             brake_held: bool = False) -> tuple[bool, bool]:
     """Returns (want_enable, override_long).
+
+    `user_brake` is selfdrived's brake *event* (an edge, or held while moving); `brake_held` is the pedal itself.
+    ACC never arms with the pedal down: a held brake at a stop is not a `user_brake`, so the detent could arm ACC
+    on a stopped car with the foot on the brake, and it pulled away on release (full review 2026-11-22).
 
     Nothing here disengages: off is stalk UP only. The old gentle-DOWN toggle-off took 1, 2 or 3
     presses depending on a hidden brake latch, so "DOWN to turn off" only worked some of the time.
@@ -101,8 +106,9 @@ class H6Mads:
       # Without this, ENABLE arrives without OVERRIDE_LONGITUDINAL and state.py:86 lands on
       # State.enabled instead of State.overriding -- the FSM would believe long is live with a
       # foot on the pedal (the panda blocks the TX either way, but the two layers must agree).
-      self.long_enabled = not user_brake
-      self.override_source = OVERRIDE_BRAKE if user_brake else OVERRIDE_NONE
+      braking = user_brake or brake_held
+      self.long_enabled = not braking
+      self.override_source = OVERRIDE_BRAKE if braking else OVERRIDE_NONE
 
     override_long = (engaged or want_enable) and not self.long_enabled
     # The source only means anything while overriding, so clear it rather than let a stale cause

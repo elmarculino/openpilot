@@ -25,8 +25,8 @@ class CardSim:
     self.long_prev = False
     self.CS_prev = car.CarState()
 
-  def step(self, kph, enabled, long_active, buttons=()):
-    CS = car.CarState(vEgo=kph * CV.KPH_TO_MS, cruiseState={"available": True})
+  def step(self, kph, enabled, long_active, buttons=(), gas=False):
+    CS = car.CarState(vEgo=kph * CV.KPH_TO_MS, cruiseState={"available": True}, gasPressed=gas)
     CS.buttonEvents = [ButtonEvent(type=t, pressed=p) for t, p in buttons]
     self.h.update_v_cruise(CS, enabled, is_metric=True)
     if self.h.should_initialize(CS, enabled, self.enabled_prev, long_active, self.long_prev):
@@ -59,6 +59,19 @@ def test_detent_with_a_slow_round_trip_still_initializes():
 
 def test_unrelated_long_edge_after_the_window_does_not_reinitialize():
   assert _lat_only_then_detent(CardSim(_cp()), lag=LONG_ENGAGE_WINDOW + 5) == 30
+
+
+def test_detent_with_the_gas_held_initializes_on_release():
+  # full review 2026-11-22: lat-only at 30, accelerate by foot to 100, pull the detent with the pedal still down and
+  # lift 1 s later. gasPressedOverride holds longActive off until the lift, so the window must wait for it.
+  sim = CardSim(_cp())
+  sim.step(30, False, False)
+  sim.step(30, True, False)
+  sim.step(100, True, False, [(ButtonType.setCruise, True)], gas=True)
+  for _ in range(LONG_ENGAGE_WINDOW * 2):
+    sim.step(100, True, False, gas=True)
+  sim.step(100, True, False)
+  assert sim.step(100, True, True) == 100
 
 
 def test_gas_override_end_keeps_the_set_speed():

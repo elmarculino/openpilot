@@ -4,12 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 echo "== openpilot =="
 git -C "$ROOT" log -1 --oneline
-echo "== opendbc_repo (expect 581017e or later on mk4-haval-phev-2026) =="
+echo "== opendbc_repo =="
 git -C "$ROOT/opendbc_repo" log -1 --oneline
 echo "== GWM car interface =="
 ls "$ROOT/opendbc_repo/opendbc/car/gwm"/{interface,carcontroller,carstate,gwmcan,values}.py
 echo "== GWM safety =="
 test -f "$ROOT/opendbc_repo/opendbc/safety/modes/gwm.h" && echo "gwm.h OK"
 echo "== torqued allows gwm =="
-grep -n "gwm" "$ROOT/selfdrive/locationd/torqued.py" || true
+grep -n "gwm" "$ROOT/openpilot/selfdrive/locationd/torqued.py" || echo "MISSING: gwm not in torqued.py"
 echo "== done =="

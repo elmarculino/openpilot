@@ -277,6 +277,7 @@ class SelfdriveD:
           user_brake=user_brake,
           lkas_tap=lkas_tap,
           acc_enable=CS.buttonEnable,
+          brake_held=CS.brakePressed,
         )
         if want_enable:
           self.events.add(EventName.buttonEnable)

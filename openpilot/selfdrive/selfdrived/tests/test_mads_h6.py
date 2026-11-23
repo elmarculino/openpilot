@@ -348,3 +348,18 @@ def test_gentle_after_brake_released_reports_the_gesture():
   _, override = m.update(engaged=True, user_brake=False, lkas_tap=True, acc_enable=False)
   assert override
   assert m.override_source == OVERRIDE_LATERAL_ONLY
+
+
+def test_detent_with_the_brake_held_at_a_stop_is_lat_only():
+  # full review 2026-11-22: a held brake at a stop is no `user_brake` event, so the detent armed ACC and the car pulled
+  # away on release; the pedal itself must keep ACC off until the next detent
+  m = H6Mads()
+  _lat_only(m)
+  want_enable, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=True, brake_held=True)
+  assert want_enable
+  assert override
+  assert not m.long_enabled
+  assert m.override_source == OVERRIDE_BRAKE
+  _, override = m.update(engaged=True, user_brake=False, lkas_tap=False, acc_enable=False)  # pedal released
+  assert override
+  assert not m.long_enabled

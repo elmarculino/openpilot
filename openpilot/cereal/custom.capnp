@@ -57,7 +57,7 @@ struct GwmLatState @0xf35cc4560bbf6ec2 {
   frames @1 :UInt16;            # consecutive frames in this reason (saturates)
   aRx @2 :UInt8;                # EPS A_RX_STEER_REQUESTED (1 = obeying the angle command)
   driverTorque @3 :Float32;     # B_RX_DRIVER_TORQUE, what the override latch looks at
-  angleErrorDeg @4 :Float32;    # commanded - measured wheel angle: whether the wheel really stopped following
+  angleErrorDeg @4 :Float32;    # desired (latcontrol) - measured wheel angle, what the MK4 EPS fault gate compares
 
   enum Reason {
     none @0;                    # steering applied, or not engaged
